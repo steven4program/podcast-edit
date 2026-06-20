@@ -26,3 +26,42 @@ def test_normalize_extracts_and_classifies_events():
 
 def test_normalize_duration_is_last_word_end():
     assert tr.normalize_scribe(_raw())["duration"] == 1.3
+
+
+# ── new tests ──────────────────────────────────────────────────────────────
+
+def test_speaker_from_filename():
+    assert tr.speaker_from_filename("2026-06-01--t02-54-49am--guest468401--tony.wav") == "tony"
+    assert tr.speaker_from_filename("2026-06-01--t02-54-49am--60b4e983be6c5f0878af8f50--ted35.wav") == "ted35"
+    assert tr.speaker_from_filename("/some/path/2026-06-01--t02-54-49am--host--wan.flac") == "wan"
+    assert tr.speaker_from_filename("/recordings/2026-06-01--t02-54-49am--guest--bohr.mp3") == "bohr"
+
+
+def test_normalize_scribe_speaker_override():
+    t = tr.normalize_scribe(_raw(), speaker="host")
+    assert all(w["speaker"] == "host" for w in t["words"])
+    assert all(e["speaker"] == "host" for e in t["events"])
+
+
+def test_merge_tracks_sorts_and_reids():
+    track_a = {
+        "audio": "", "duration": 1.5,
+        "words": [
+            {"id": 0, "text": "hello", "start": 0.0, "end": 0.4, "speaker": "a"},
+            {"id": 1, "text": "world", "start": 1.0, "end": 1.5, "speaker": "a"},
+        ],
+        "events": [{"type": "cough", "start": 0.2, "end": 0.3, "speaker": "a"}],
+    }
+    track_b = {
+        "audio": "", "duration": 0.9,
+        "words": [
+            {"id": 0, "text": "hi", "start": 0.5, "end": 0.9, "speaker": "b"},
+        ],
+        "events": [{"type": "laughter", "start": 0.6, "end": 0.8, "speaker": "b"}],
+    }
+    merged = tr.merge_tracks([track_a, track_b])
+    assert [w["text"] for w in merged["words"]] == ["hello", "hi", "world"]
+    assert [w["id"] for w in merged["words"]] == [0, 1, 2]
+    assert [w["speaker"] for w in merged["words"]] == ["a", "b", "a"]
+    assert merged["duration"] == 1.5
+    assert [e["type"] for e in merged["events"]] == ["cough", "laughter"]
