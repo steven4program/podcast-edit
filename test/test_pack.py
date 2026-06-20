@@ -16,3 +16,14 @@ def test_pack_no_inter_token_spaces():
 def test_mmss():
     assert pack._mmss(0) == "00:00"
     assert pack._mmss(75) == "01:15"
+
+
+def test_pack_converts_simplified_to_traditional():
+    t = {"words": [
+        {"id": 0, "text": "欢迎", "start": 0.0, "end": 0.4, "speaker": "ted35"},
+        {"id": 1, "text": "来到", "start": 0.4, "end": 0.8, "speaker": "ted35"},
+        {"id": 2, "text": "节目", "start": 0.8, "end": 1.2, "speaker": "ted35"},
+    ]}
+    out = pack.pack(t)
+    assert "歡迎來到節目" in out
+    assert "欢迎" not in out and "节目" not in out

@@ -1,5 +1,12 @@
-"""Pack a canonical transcript into a token-efficient zh-TW reading view."""
+"""Pack a canonical transcript into a token-efficient zh-TW reading view.
+
+Scribe transcribes Mandarin to Simplified; we convert the reading view to
+Traditional (Taiwan) here. transcript.json stays the faithful Scribe record.
+"""
+from opencc import OpenCC
+
 _PUNCT = {",": "，", ".": "。", "!": "！", "?": "？", ":": "：", ";": "；"}
+_CC = OpenCC("s2twp")  # Simplified -> Traditional (Taiwan, with idioms)
 
 
 def _mmss(seconds):
@@ -8,7 +15,7 @@ def _mmss(seconds):
 
 
 def _norm(text):
-    return "".join(_PUNCT.get(c, c) for c in text)
+    return _CC.convert("".join(_PUNCT.get(c, c) for c in text))
 
 
 def pack(transcript, gap=0.5):
