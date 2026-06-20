@@ -1,0 +1,13 @@
+[project]
+name = "podcast-edit"
+version = "0.1.0"
+description = "Lean zh-TW podcast audio editing skill"
+requires-python = ">=3.10"
+dependencies = ["requests>=2.31", "numpy>=1.24", "soundfile>=0.12"]
+
+[project.optional-dependencies]
+ai = ["google-genai>=1.0.0"]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools]
+packages = ["helpers"]
