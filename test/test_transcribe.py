@@ -37,6 +37,20 @@ def test_speaker_from_filename():
     assert tr.speaker_from_filename("/recordings/2026-06-01--t02-54-49am--guest--bohr.mp3") == "bohr"
 
 
+def test_classify_chinese_events():
+    # Scribe emits Chinese event labels for zh audio (confirmed at Gate 1)
+    assert tr._classify_event("(咳嗽声)") == "cough"
+    assert tr._classify_event("(清嗓声)") == "throat_clear"
+    assert tr._classify_event("(笑声)") == "laughter"
+    assert tr._classify_event("(吸气声)") == "breath"
+    assert tr._classify_event("(呼吸声)") == "breath"
+    assert tr._classify_event("(三秒停顿)") == "pause"
+    assert tr._classify_event("(七秒沉默)") == "pause"
+    assert tr._classify_event("(背景噪音)") == "noise"
+    assert tr._classify_event("(按键声)") == "noise"
+    assert tr._classify_event("(something odd)") == "other"
+
+
 def test_normalize_scribe_speaker_override():
     t = tr.normalize_scribe(_raw(), speaker="host")
     assert all(w["speaker"] == "host" for w in t["words"])

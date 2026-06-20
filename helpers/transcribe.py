@@ -2,13 +2,24 @@
 import json, os, subprocess, tempfile
 import requests
 
-_EVENT_MAP = {"cough": "cough", "throat": "throat_clear", "laugh": "laughter", "breath": "breath"}
+# Scribe emits audio-event labels in the transcription language. For zh audio these
+# are Chinese (e.g. "(清嗓声)" throat clear, "(笑声)" laughter). Substring-matched in order;
+# English keywords kept for non-zh audio. Order matters: specific before generic.
+_EVENT_KEYWORDS = [
+    ("咳", "cough"), ("cough", "cough"),
+    ("清嗓", "throat_clear"), ("清喉", "throat_clear"), ("throat", "throat_clear"),
+    ("笑", "laughter"), ("laugh", "laughter"),
+    ("吸气", "breath"), ("呼吸", "breath"), ("喘", "breath"), ("breath", "breath"),
+    ("停顿", "pause"), ("沉默", "pause"), ("静默", "pause"), ("无语", "pause"),
+    ("pause", "pause"), ("silen", "pause"),
+    ("噪", "noise"), ("背景", "noise"), ("按键", "noise"), ("键盘", "noise"), ("noise", "noise"),
+]
 
 
 def _classify_event(text):
     low = text.lower()
-    for key, label in _EVENT_MAP.items():
-        if key in low:
+    for key, label in _EVENT_KEYWORDS:
+        if key.lower() in low:
             return label
     return "other"
 
