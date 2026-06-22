@@ -40,6 +40,25 @@ def test_verify_flags_midword_boundary():
     assert r.verify_no_midword([0.4], words) == []
 
 
+def test_verify_ignores_punctuation_token():
+    # Scribe can give a punctuation token a junk duration; you can always cut at punctuation
+    words = [{"id": 0, "text": "好", "start": 0.0, "end": 0.5, "speaker": "a"},
+             {"id": 1, "text": "？", "start": 1.0, "end": 50.0, "speaker": "b"}]
+    assert r.verify_no_midword([25.0], words) == []
+
+
+def test_safe_snap_rejects_snap_into_word():
+    words = [{"id": 0, "text": "你好", "start": 1.4, "end": 1.6, "speaker": "a"}]
+    nt, snapped = r.safe_snap(1.45, [(1.5, 2.0)], words, window=0.3)  # 1.5 is inside the word
+    assert not snapped and nt == 1.45
+
+
+def test_safe_snap_allows_clean_snap():
+    words = [{"id": 0, "text": "你好", "start": 0.0, "end": 0.5, "speaker": "a"}]
+    nt, snapped = r.safe_snap(1.45, [(1.5, 2.0)], words, window=0.3)
+    assert snapped and abs(nt - 1.5) < 1e-9
+
+
 # ── Task 2.2: snap (pure) ────────────────────────────────────────────────────
 def test_snap_point_moves_to_silence_within_window():
     new_t, snapped = r.snap_point(1.45, [(1.5, 2.2)], window=0.3)

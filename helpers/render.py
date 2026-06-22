@@ -5,7 +5,7 @@ Audio is rendered per-track and mixed down: every track is cut at the SAME merge
 timeline boundaries, so the tracks stay aligned and Phase 5 can mute a single track
 (e.g. host cough) without touching the others. Single-file input still works.
 """
-import json, os, subprocess
+import json, os, re, subprocess
 
 
 # ── pure data core ───────────────────────────────────────────────────────────
@@ -59,10 +59,18 @@ def remap_words(words, segments):
     return kept
 
 
+def _is_word(w):
+    return bool(re.search(r"\w", w["text"]))  # punctuation-only tokens (。，？…) are cuttable
+
+
 def verify_no_midword(boundaries, words):
+    # Only real words block a cut. Punctuation tokens don't — and Scribe sometimes gives
+    # them junk durations (a trailing ？ spanning tens of seconds), which would falsely
+    # block every cut in that span.
+    real = [w for w in words if _is_word(w)]
     bad = []
     for t in boundaries:
-        if any(w["start"] < t < w["end"] for w in words):
+        if any(w["start"] < t < w["end"] for w in real):
             bad.append(t)
     return bad
 
@@ -91,6 +99,15 @@ def snap_point(t, silences, window=0.3):
             if abs(edge - t) <= best_d:
                 best, best_d = edge, abs(edge - t)
     return (best, True) if best is not None else (t, False)
+
+
+def safe_snap(t, silences, words, window=0.3):
+    """Snap to silence, but never onto a position inside a real word (acoustic silence
+    edges don't always align with Scribe's word timings). Falls back to the original t."""
+    nt, snapped = snap_point(t, silences, window)
+    if snapped and any(w["start"] < nt < w["end"] for w in words if _is_word(w)):
+        return t, False
+    return nt, snapped
 
 
 def probe_duration(path):
@@ -144,8 +161,8 @@ def render(transcript, cuts, audio_path, out_path, snap_window=0.3):
     silences = _snap_silences(sources, out_path)
     snapped_count = 0
     for c in resolved:
-        ns, s1 = snap_point(c["start"], silences, snap_window)
-        ne, s2 = snap_point(c["end"], silences, snap_window)
+        ns, s1 = safe_snap(c["start"], silences, words, snap_window)
+        ne, s2 = safe_snap(c["end"], silences, words, snap_window)
         c["start"], c["end"] = ns, ne
         snapped_count += int(s1) + int(s2)
 
