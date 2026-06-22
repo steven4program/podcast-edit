@@ -36,10 +36,18 @@ they are 100% accurate — no diarization guessing.
    `edit/transcript_<speaker>_raw.json` is per-word zh-TW with matching event tags.
    Then `python -m helpers.pack edit/transcript.json > edit/packed.md`.
 2. Propose cuts — read `edit/packed.md` and `references/edit-heuristics.md`. Write
-   `edit/cuts.json`, each cut citing `start_word`/`end_word` (or `start`/`end` for events) with
-   `type` and `reason`. For fillers use `helpers.fillers.propose_filler_cuts` (Scribe filler
-   timestamps are unreliable; it finds the sound acoustically and flags the unsafe ones).
-   Present a grouped list: `[mm:ss] removed text — reason`, plus any flagged-for-review.
+   `edit/cuts.json` as `{"cuts": [...], "mutes": [...]}`:
+   - Verbal cuts: repeats (keep-later), stutters, macro segments — cite word ids.
+   - Fillers: use `helpers.fillers.propose_filler_cuts` (Scribe filler timestamps are
+     unreliable; it finds the sound acoustically and flags the unsafe ones).
+   - Cough/throat-clear (precision-first): candidates = `transcript.json` `events` of type
+     `cough`/`throat_clear` whose speaker is the configured cough-prone host. LAUGHTER IS
+     NEVER A CANDIDATE. If `GEMINI_API_KEY` is set, confirm each with
+     `helpers.ai_listen.classify(host_track, start, end)` — proceed only on `cough`/
+     `throat_clear`; a `laughter`/`speech` label means keep+flag. Remove a confirmed cough by
+     a **mute** on the host's track for the event span (no time removed, other speakers
+     untouched) — handles speech-overlapping coughs cleanly. Ambiguous → flag, don't cut.
+   Present a grouped list: `[mm:ss] removed text/sound — reason`, plus flagged-for-review.
 3. Review gate — `python -m helpers.render edit/transcript.json edit/cuts.json edit/preview.mp3`.
    (Tracks are read from transcript.json; for a single-file source pass `--audio <file>`.)
    User reads the list and listens. Apply changes to cuts.json, re-render. Loop until approved.

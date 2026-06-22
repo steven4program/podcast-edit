@@ -85,6 +85,24 @@ def test_render_output_duration_matches_kept(tmp_path):
 
 
 # ── Task 2.2: render (multitrack — per-track cut then mix) ────────────────────
+def test_render_mute_silences_span_without_removing_time(tmp_path):
+    import numpy as np, soundfile as sf
+    sr = 16000
+    tone = (0.3 * np.sin(2 * np.pi * 220 * np.arange(int(3 * sr)) / sr)).astype(np.float32)
+    wav, out = str(tmp_path / "in.wav"), str(tmp_path / "out.mp3")
+    sf.write(wav, tone, sr)
+    transcript = {"audio": wav, "duration": 3.0,
+                  "words": [{"id": 0, "text": "你好", "start": 0.0, "end": 0.5, "speaker": "in"}]}
+    # speaker == _speaker(wav) == "in"; mute 1.0-2.0s, no cuts
+    r.render(transcript, [], wav, out, mutes=[{"speaker": "in", "start": 1.0, "end": 2.0}])
+    x, sr2 = sf.read(out)
+    x = x if x.ndim == 1 else x.mean(axis=1)
+    rms = lambda a, b: float(np.sqrt(np.mean(x[int(a * sr2):int(b * sr2)] ** 2)))
+    assert abs(r.probe_duration(out) - 3.0) < 0.2  # time NOT removed
+    assert rms(1.3, 1.7) < 0.02                     # muted span ~silent
+    assert rms(0.1, 0.8) > 0.05                     # rest keeps the tone
+
+
 def test_render_multitrack_cuts_each_track_and_mixes(tmp_path):
     a, b, out = str(tmp_path / "a.wav"), str(tmp_path / "b.wav"), str(tmp_path / "out.mp3")
     make_two_tracks(a, b)

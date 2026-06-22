@@ -28,12 +28,15 @@ Scribe v2 marks these with `-` (e.g. `它最-最主要`, `K-Kinesis`) — strong
 Pre-show prep, off-topic chit-chat, tech debugging ("聽得到嗎"), repeated takes, privacy.
 Prefer boundaries at sentence/breath edges.
 
-## Non-verbal (cough/throat-clear) — precision-first  [built in Phase 5]
+## Non-verbal (cough/throat-clear) — precision-first
 - Source: transcript.json events (Scribe), already attributed to a speaker by track.
-- Focus the configured cough-prone host; flag (don't auto-cut) others.
-- Auto-cut only confident cough/throat_clear. LAUGHTER IS NEVER A CANDIDATE.
-- Speech-overlapping cough → flag, never auto-cut (Phase 5 can instead mute just that
-  speaker's track, removing the cough without losing time).
+- Candidates = type cough/throat_clear AND speaker == cough-prone host. Flag others, don't cut.
+- LAUGHTER IS NEVER A CANDIDATE (Scribe OR Gemini saying "laughter" → keep).
+- If GEMINI_API_KEY is set, confirm each candidate with `helpers.ai_listen.classify`; cut only
+  when it also says cough/throat_clear. (Gemini and Scribe disagree on soft sounds — require both.)
+- Remove a confirmed cough via a **mute** on the host's track (render `mutes=`): the cough
+  vanishes with no time removed and no effect on other speakers — speech-overlapping coughs
+  handled cleanly. Ambiguous → flag, never auto-cut.
 
 ## Dead air
 Ignore ≤0.5s. Consider >1s. Long silences also surface in QA.

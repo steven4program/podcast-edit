@@ -147,14 +147,23 @@ def _snap_silences(sources, scratch):
         os.remove(mix)
 
 
-def _filtergraph(n_tracks, segments):
-    """Cut every track at `segments` (3ms fades per piece), concat per track, then mix."""
+def _filtergraph(n_tracks, segments, track_mutes=None):
+    """Cut every track at `segments` (3ms fades per piece), concat per track, then mix.
+    track_mutes[ti] = [(s,e),...] silences that track in those original-timeline spans
+    (the multitrack cough superpower: kill a cough on the host's track without removing time
+    or touching other speakers)."""
+    track_mutes = track_mutes or {}
     parts, track_labels = [], []
     for ti in range(n_tracks):
+        src = f"[{ti}:a]"
+        if track_mutes.get(ti):
+            en = "+".join(f"between(t,{s},{e})" for s, e in track_mutes[ti])
+            parts.append(f"{src}volume=0:enable='{en}'[m{ti}]")
+            src = f"[m{ti}]"
         seg_labels = []
         for si, (s, e) in enumerate(segments):
             lbl = f"a{ti}_{si}"
-            parts.append(f"[{ti}:a]atrim={s}:{e},asetpts=PTS-STARTPTS,"
+            parts.append(f"{src}atrim={s}:{e},asetpts=PTS-STARTPTS,"
                          f"afade=t=in:st=0:d=0.003,"
                          f"afade=t=out:st={max(e - s - 0.003, 0)}:d=0.003[{lbl}]")
             seg_labels.append(f"[{lbl}]")
@@ -168,7 +177,11 @@ def _filtergraph(n_tracks, segments):
     return ";".join(parts)
 
 
-def render(transcript, cuts, audio_path, out_path, snap_window=0.3):
+def _speaker(path):
+    return os.path.splitext(os.path.basename(path))[0].split("--")[-1]
+
+
+def render(transcript, cuts, audio_path, out_path, snap_window=0.3, mutes=None):
     words, duration = transcript["words"], transcript["duration"]
     sources = transcript.get("tracks") or [audio_path]
     resolved = resolve_cut_times(cuts, words)
@@ -189,8 +202,13 @@ def render(transcript, cuts, audio_path, out_path, snap_window=0.3):
     if flagged:
         raise ValueError(f"mid-word boundaries after snap: {flagged}")
 
+    track_mutes = {}
+    for m in mutes or []:
+        for ti, src in enumerate(sources):
+            if _speaker(src) == m["speaker"]:
+                track_mutes.setdefault(ti, []).append((m["start"], m["end"]))
     inputs = [x for src in sources for x in ("-i", src)]
-    fc = _filtergraph(len(sources), segments)
+    fc = _filtergraph(len(sources), segments, track_mutes)
     subprocess.run(["ffmpeg", "-y", *inputs, "-filter_complex", fc, "-map", "[out]", out_path],
                    check=True, capture_output=True)
 
@@ -207,5 +225,6 @@ if __name__ == "__main__":
     p.add_argument("--audio", help="single-file source (ignored if transcript has tracks)")
     a = p.parse_args()
     t = json.load(open(a.transcript))
-    res = render(t, json.load(open(a.cuts))["cuts"], a.audio, a.out)
+    spec = json.load(open(a.cuts))  # {"cuts": [...], "mutes": [...]} (mutes optional)
+    res = render(t, spec["cuts"], a.audio, a.out, mutes=spec.get("mutes"))
     print(json.dumps(res, ensure_ascii=False))
