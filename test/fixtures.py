@@ -32,3 +32,14 @@ def make_test_wav(path, sr=16000):
     sig[(t >= 0.0) & (t < 1.5)] = tone[(t >= 0.0) & (t < 1.5)]
     sig[(t >= 2.2) & (t < 3.7)] = tone[(t >= 2.2) & (t < 3.7)]
     sf.write(path, sig.astype(np.float32), sr)
+
+
+def make_two_tracks(path_a, path_b, sr=16000):
+    """Two time-aligned 4s mono WAVs: A speaks 0-1.5s, B speaks 2.2-3.7s (mix is
+    silent 1.5-2.2s and 3.7-4s — same gaps as make_test_wav)."""
+    t = np.arange(int(4.0 * sr)) / sr
+    a, b = np.zeros_like(t), np.zeros_like(t)
+    a[(t >= 0.0) & (t < 1.5)] = (0.3 * np.sin(2 * np.pi * 220 * t))[(t >= 0.0) & (t < 1.5)]
+    b[(t >= 2.2) & (t < 3.7)] = (0.3 * np.sin(2 * np.pi * 330 * t))[(t >= 2.2) & (t < 3.7)]
+    sf.write(path_a, a.astype(np.float32), sr)
+    sf.write(path_b, b.astype(np.float32), sr)

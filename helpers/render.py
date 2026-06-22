@@ -1,0 +1,179 @@
+"""Render: turn a cut-list into a smooth output audio file.
+
+Pure timeline math (resolve / kept-segments / remap / verify) is the testable core.
+Audio is rendered per-track and mixed down: every track is cut at the SAME merged-
+timeline boundaries, so the tracks stay aligned and Phase 5 can mute a single track
+(e.g. host cough) without touching the others. Single-file input still works.
+"""
+import json, os, subprocess
+
+
+# ── pure data core ───────────────────────────────────────────────────────────
+def resolve_cut_times(cuts, words):
+    by_id = {w["id"]: w for w in words}
+    out = []
+    for c in cuts:
+        if c.get("start_word") is not None:
+            start, end = by_id[c["start_word"]]["start"], by_id[c["end_word"]]["end"]
+        else:
+            start, end = c["start"], c["end"]
+        out.append({**c, "start": start, "end": end})
+    return out
+
+
+def compute_kept_segments(cuts, duration):
+    intervals = sorted((c["start"], c["end"]) for c in cuts)
+    merged = []
+    for s, e in intervals:
+        if merged and s <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+    segs, pos = [], 0.0
+    for s, e in merged:
+        if s > pos:
+            segs.append((pos, s))
+        pos = max(pos, e)
+    if pos < duration:
+        segs.append((pos, duration))
+    return segs
+
+
+def _removed_before(t, segments):
+    kept = 0.0
+    for s, e in segments:
+        if e <= t:
+            kept += e - s
+        elif s < t < e:
+            kept += t - s
+    return kept
+
+
+def remap_words(words, segments):
+    kept = []
+    for w in words:
+        if not any(s <= w["start"] < e for s, e in segments):
+            continue
+        kept.append({**w, "start": _removed_before(w["start"], segments),
+                     "end": _removed_before(w["end"], segments)})
+    return kept
+
+
+def verify_no_midword(boundaries, words):
+    bad = []
+    for t in boundaries:
+        if any(w["start"] < t < w["end"] for w in words):
+            bad.append(t)
+    return bad
+
+
+# ── audio: silence detection, snapping, render ───────────────────────────────
+def detect_silences(path, thresh_db=-35.0, min_len=0.3):
+    proc = subprocess.run(
+        ["ffmpeg", "-i", path, "-af",
+         f"silencedetect=noise={thresh_db}dB:d={min_len}", "-f", "null", "-"],
+        capture_output=True, text=True)
+    starts, sils = [], []
+    for line in proc.stderr.splitlines():
+        if "silence_start:" in line:
+            starts.append(float(line.split("silence_start:")[1].strip()))
+        elif "silence_end:" in line:
+            end = float(line.split("silence_end:")[1].split("|")[0].strip())
+            if starts:
+                sils.append((starts.pop(), end))
+    return sils
+
+
+def snap_point(t, silences, window=0.3):
+    best, best_d = None, window
+    for s, e in silences:
+        for edge in (s, e):
+            if abs(edge - t) <= best_d:
+                best, best_d = edge, abs(edge - t)
+    return (best, True) if best is not None else (t, False)
+
+
+def probe_duration(path):
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=nk=1:nw=1", path], capture_output=True, text=True, check=True)
+    return float(out.stdout.strip())
+
+
+def _snap_silences(sources, scratch):
+    """Silences to snap cut points to = where NOBODY is talking = silence in the mix."""
+    if len(sources) == 1:
+        return detect_silences(sources[0])
+    mix = scratch + ".snapmix.wav"
+    inputs = [x for src in sources for x in ("-i", src)]
+    subprocess.run(["ffmpeg", "-y", *inputs, "-filter_complex",
+                    f"amix=inputs={len(sources)}:normalize=0[m]", "-map", "[m]", mix],
+                   check=True, capture_output=True)
+    try:
+        return detect_silences(mix)
+    finally:
+        os.remove(mix)
+
+
+def _filtergraph(n_tracks, segments):
+    """Cut every track at `segments` (3ms fades per piece), concat per track, then mix."""
+    parts, track_labels = [], []
+    for ti in range(n_tracks):
+        seg_labels = []
+        for si, (s, e) in enumerate(segments):
+            lbl = f"a{ti}_{si}"
+            parts.append(f"[{ti}:a]atrim={s}:{e},asetpts=PTS-STARTPTS,"
+                         f"afade=t=in:st=0:d=0.003,"
+                         f"afade=t=out:st={max(e - s - 0.003, 0)}:d=0.003[{lbl}]")
+            seg_labels.append(f"[{lbl}]")
+        parts.append("".join(seg_labels) + f"concat=n={len(segments)}:v=0:a=1[t{ti}]")
+        track_labels.append(f"[t{ti}]")
+    loud = "loudnorm=I=-16:TP=-1.5:LRA=11[out]"
+    if n_tracks == 1:
+        parts.append(f"{track_labels[0]}{loud}")
+    else:
+        parts.append("".join(track_labels) + f"amix=inputs={n_tracks}:normalize=0,{loud}")
+    return ";".join(parts)
+
+
+def render(transcript, cuts, audio_path, out_path, snap_window=0.3):
+    words, duration = transcript["words"], transcript["duration"]
+    sources = transcript.get("tracks") or [audio_path]
+    resolved = resolve_cut_times(cuts, words)
+
+    silences = _snap_silences(sources, out_path)
+    snapped_count = 0
+    for c in resolved:
+        ns, s1 = snap_point(c["start"], silences, snap_window)
+        ne, s2 = snap_point(c["end"], silences, snap_window)
+        c["start"], c["end"] = ns, ne
+        snapped_count += int(s1) + int(s2)
+
+    segments = compute_kept_segments(resolved, duration)
+    if not segments:
+        raise ValueError("cuts remove the entire audio")
+    boundaries = [b for seg in segments for b in seg if 0 < b < duration]
+    flagged = verify_no_midword(boundaries, words)
+    if flagged:
+        raise ValueError(f"mid-word boundaries after snap: {flagged}")
+
+    inputs = [x for src in sources for x in ("-i", src)]
+    fc = _filtergraph(len(sources), segments)
+    subprocess.run(["ffmpeg", "-y", *inputs, "-filter_complex", fc, "-map", "[out]", out_path],
+                   check=True, capture_output=True)
+
+    kept = {"words": remap_words(words, segments), "segments": segments}
+    with open(out_path.replace(".mp3", "_kept_transcript.json"), "w") as f:
+        json.dump(kept, f, ensure_ascii=False, indent=2)
+    return {"segments": segments, "snapped": snapped_count, "flagged": flagged}
+
+
+if __name__ == "__main__":
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("transcript"); p.add_argument("cuts"); p.add_argument("out")
+    p.add_argument("--audio", help="single-file source (ignored if transcript has tracks)")
+    a = p.parse_args()
+    t = json.load(open(a.transcript))
+    res = render(t, json.load(open(a.cuts))["cuts"], a.audio, a.out)
+    print(json.dumps(res, ensure_ascii=False))
