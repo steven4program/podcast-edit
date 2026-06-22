@@ -6,6 +6,13 @@ The LLM consults this when proposing cuts. Knowledge, not machinery.
 嗯、呃、啊、欸、那個（贅詞）、然後（贅詞）、就是（贅詞）、對對對（附和填充）。
 Keep a filler when it carries meaning ("那個" as a real demonstrative, "就是" introducing a definition).
 
+**Filler timestamps are unreliable.** Scribe gives 呃/嗯 near-zero-width tokens, often parked
+in the wrong silence (verified: a 呃 whose sound is at 47.2s got a token at 49.0s). So do NOT
+cut on the token span — use `helpers.fillers.propose_filler_cuts`, which locates the actual
+filler SOUND acoustically in the gap between the surrounding content words, on that speaker's
+own track. Fillers embedded in continuous speech/stutter or in cross-talk are **flagged, not
+cut** (review manually; cross-talk ones are handled in Phase 5 by muting that speaker's track).
+
 ## Repeat-collapse (PRIORITY #1) — delete-earlier, keep-later
 Adjacent duplicated word/phrase (exact or near-exact) → keep ONE, the LATER instance.
 - `我覺得 我覺得 這個` → delete the first `我覺得`.

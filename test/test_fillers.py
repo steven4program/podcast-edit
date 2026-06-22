@@ -1,0 +1,40 @@
+import numpy as np
+import soundfile as sf
+
+import helpers.fillers as f
+
+
+def _track(path, spans, sr=16000, dur=3.0):
+    t = np.arange(int(dur * sr)) / sr
+    x = np.zeros_like(t)
+    for a, b in spans:
+        x[(t >= a) & (t < b)] = (0.3 * np.sin(2 * np.pi * 200 * t))[(t >= a) & (t < b)]
+    sf.write(path, x.astype(np.float32), sr)
+
+
+def test_acoustic_cut_lands_on_real_sound_not_token(tmp_path):
+    # track: 你好 0.0-0.5, 呃 SOUND 1.0-1.3, 再見 2.0-2.5 (silence between)
+    p = str(tmp_path / "2026-06-01--spkX.wav")
+    _track(p, [(0.0, 0.5), (1.0, 1.3), (2.0, 2.5)])
+    transcript = {"tracks": [p], "words": [
+        {"id": 0, "text": "你好", "start": 0.0, "end": 0.5, "speaker": "spkX"},
+        {"id": 1, "text": "呃", "start": 2.40, "end": 2.41, "speaker": "spkX"},  # mis-placed token
+        {"id": 2, "text": "再見", "start": 2.0, "end": 2.5, "speaker": "spkX"},
+    ]}
+    cuts, flagged = f.propose_filler_cuts(transcript, [p])
+    assert len(cuts) == 1 and not flagged
+    # cut lands on the actual 呃 sound (~1.0-1.3), NOT the token position (2.4)
+    assert 0.9 < cuts[0]["start"] < 1.1 and 1.2 < cuts[0]["end"] < 1.5
+
+
+def test_flags_filler_embedded_in_continuous_speech(tmp_path):
+    # no silence around the filler -> voiced span exceeds _MAX_EXTENT -> flagged, not cut
+    p = str(tmp_path / "2026-06-01--spkY.wav")
+    _track(p, [(0.0, 3.0)])  # continuous sound across the whole gap
+    transcript = {"tracks": [p], "words": [
+        {"id": 0, "text": "你好", "start": 0.0, "end": 0.5, "speaker": "spkY"},
+        {"id": 1, "text": "呃", "start": 1.5, "end": 1.51, "speaker": "spkY"},
+        {"id": 2, "text": "再見", "start": 2.5, "end": 3.0, "speaker": "spkY"},
+    ]}
+    cuts, flagged = f.propose_filler_cuts(transcript, [p])
+    assert not cuts and len(flagged) == 1

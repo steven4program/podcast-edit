@@ -59,20 +59,35 @@ def remap_words(words, segments):
     return kept
 
 
+_FILLERS = ("呃", "嗯", "啊", "欸")
+
+
 def _is_word(w):
     return bool(re.search(r"\w", w["text"]))  # punctuation-only tokens (。，？…) are cuttable
+
+
+def _protected(w):
+    # A cut must not slice a CONTENT word. Punctuation and fillers (呃嗯啊欸) are removable,
+    # so they never block a cut — otherwise the mid-word guard refuses to cut the very
+    # filler we're trying to remove.
+    return _is_word(w) and w["text"].strip() not in _FILLERS
+
+
+_MIDWORD_EPS = 0.05  # a boundary within 50ms of a word edge counts as "at the edge"
+
+
+def _inside_word(t, real, eps=_MIDWORD_EPS):
+    # Scribe word timestamps are imprecise and micro-overlap each other, so only flag a
+    # boundary that is clearly INSIDE a word (>eps from both edges), not edge-touches.
+    return any(w["start"] + eps < t < w["end"] - eps for w in real)
 
 
 def verify_no_midword(boundaries, words):
     # Only real words block a cut. Punctuation tokens don't — and Scribe sometimes gives
     # them junk durations (a trailing ？ spanning tens of seconds), which would falsely
     # block every cut in that span.
-    real = [w for w in words if _is_word(w)]
-    bad = []
-    for t in boundaries:
-        if any(w["start"] < t < w["end"] for w in real):
-            bad.append(t)
-    return bad
+    real = [w for w in words if _protected(w)]
+    return [t for t in boundaries if _inside_word(t, real)]
 
 
 # ── audio: silence detection, snapping, render ───────────────────────────────
@@ -105,7 +120,7 @@ def safe_snap(t, silences, words, window=0.3):
     """Snap to silence, but never onto a position inside a real word (acoustic silence
     edges don't always align with Scribe's word timings). Falls back to the original t."""
     nt, snapped = snap_point(t, silences, window)
-    if snapped and any(w["start"] < nt < w["end"] for w in words if _is_word(w)):
+    if snapped and _inside_word(nt, [w for w in words if _protected(w)]):
         return t, False
     return nt, snapped
 

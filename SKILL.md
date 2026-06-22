@@ -37,7 +37,9 @@ they are 100% accurate — no diarization guessing.
    Then `python -m helpers.pack edit/transcript.json > edit/packed.md`.
 2. Propose cuts — read `edit/packed.md` and `references/edit-heuristics.md`. Write
    `edit/cuts.json`, each cut citing `start_word`/`end_word` (or `start`/`end` for events) with
-   `type` and `reason`. Present a grouped list: `[mm:ss] removed text — reason`.
+   `type` and `reason`. For fillers use `helpers.fillers.propose_filler_cuts` (Scribe filler
+   timestamps are unreliable; it finds the sound acoustically and flags the unsafe ones).
+   Present a grouped list: `[mm:ss] removed text — reason`, plus any flagged-for-review.
 3. Review gate — `python -m helpers.render edit/transcript.json edit/cuts.json edit/preview.mp3`.
    (Tracks are read from transcript.json; for a single-file source pass `--audio <file>`.)
    User reads the list and listens. Apply changes to cuts.json, re-render. Loop until approved.
