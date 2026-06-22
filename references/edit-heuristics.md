@@ -14,6 +14,10 @@ own track. Fillers embedded in continuous speech/stutter or in cross-talk are **
 cut** (review manually; cross-talk ones are handled in Phase 5 by muting that speaker's track).
 
 ## Repeat-collapse (PRIORITY #1) — delete-earlier, keep-later
+Recall comes from `helpers.repeats` (adjacent-duplicate scan, per speaker) — run it instead
+of eyeballing; it has good recall but flags false positives you MUST drop: reduplicated words
+and names (`剛剛`, `常常`, `萬萬`, `汪汪`) and the emphasis/rhetoric below. You judge, it finds.
+
 Adjacent duplicated word/phrase (exact or near-exact) → keep ONE, the LATER instance.
 - `我覺得 我覺得 這個` → delete the first `我覺得`.
 - `提到說 就是 就是 這個東西` → delete the first `就是`.
