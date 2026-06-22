@@ -46,6 +46,25 @@ talking, so the sound overlaps his *own* words on his *own* track. Two consequen
   needs **spectral denoise** (RNNoise / iZotope-class), which is signal processing, not
   editing — **out of scope for v1**. Those are flagged for the human, not auto-removed.
 
+### Roadmap: speaker-specific separation for co-articulated clears
+
+Empirically exhausted (2026-06-22) the realistic *automatic* removal paths for co-articulated
+clears — all failed on this content: RNNoise/`arnndn` (kept it), `afftdn` FFT denoise (muffled),
+numpy spectral-inpainting (no effect), and AudioSep language-queried separation (gutted the
+voice). Root cause is structural: a nose/throat-clear is HF turbulent noise that overlaps the
+host's speech in BOTH time and frequency, sharing the signature of his fricative consonants
+(ㄒ/ㄙ/ㄕ/ㄈ) — so generic models can't separate it, and classification alone can't remove it
+(knowing *when* a clear occurs doesn't unmix it from the simultaneous speech).
+
+The legitimate ML direction is **not a classifier** (detection is already solved via the Gemini
+sweep) but a **speaker-specific mask-based separation model**: train a small U-Net/ResUNet that,
+given his mixed spectrogram, outputs a time-frequency mask attenuating his clear while keeping
+speech. The key asset is free, personalized training data — **his isolated throat/nose-clears
+harvested from gaps** (the existing detector already finds these), mixed synthetically with his
+clean speech to make paired examples. Expect weeks of work, GPU-assisted, and a hard physical
+ceiling on fully-overlapping cases (same T-F bins can't be perfectly un-mixed). Revisit only if
+the detect-+-flag-+-mute-gaps workflow proves insufficient in practice.
+
 ---
 
 ## Design principles

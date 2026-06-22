@@ -45,14 +45,20 @@ they are 100% accurate — no diarization guessing.
    - Verbal cuts: repeats (keep-later), stutters, macro segments — cite word ids.
    - Fillers: use `helpers.fillers.propose_filler_cuts` (Scribe filler timestamps are
      unreliable; it finds the sound acoustically and flags the unsafe ones).
-   - Cough/throat-clear (precision-first): candidates = `transcript.json` `events` of type
-     `cough`/`throat_clear` whose speaker is the configured cough-prone host. LAUGHTER IS
-     NEVER A CANDIDATE. If `GEMINI_API_KEY` is set, confirm each with
-     `helpers.ai_listen.classify(host_track, start, end)` — proceed only on `cough`/
-     `throat_clear`; a `laughter`/`speech` label means keep+flag. Remove a confirmed cough by
-     a **mute** on the host's track for the event span (no time removed, other speakers
-     untouched) — handles speech-overlapping coughs cleanly. Ambiguous → flag, don't cut.
-   Present a grouped list: `[mm:ss] removed text/sound — reason`, plus flagged-for-review.
+   - Cough/throat-clear (THE headline goal, recall-first; needs `GEMINI_API_KEY`): Scribe's
+     event tagger misses most soft clears, so **sweep the host's OWN track**:
+     `python -m helpers.ai_listen <host_track> edit/transcript.json <host> --throttle 0`
+     (paid Gemini tier: `--throttle 0`; free tier: keep `--throttle 7` and/or `--max-requests N`
+     to cap cost). It Gemini-sweeps the track, drops silent-window hallucinations
+     (`verify_on_track` — an event must have real energy on the host's own track, so another
+     speaker talking on their track never counts), and splits hits into:
+       - `mutes` — the clear sits in a **gap** in his own speech → add to `cuts.json` `mutes`;
+         render mutes his track for that span (no time removed, other speakers untouched).
+       - `flagged` — **co-articulated** with his own words → write to `edit/flagged.md`
+         (`mm:ss + type`) for manual repair. Cut/mute can't remove these without taking the
+         words too (spectral denoise is out of scope — see the roadmap in the design spec).
+     LAUGHTER IS NEVER A CANDIDATE.
+   Present a grouped list: `[mm:ss] removed text/sound — reason`, plus the `flagged.md` items.
 3. Review gate — `python -m helpers.render edit/transcript.json edit/cuts.json edit/preview.mp3`.
    (Tracks are read from transcript.json; for a single-file source pass `--audio <file>`.)
    User reads the list and listens. Apply changes to cuts.json, re-render. Loop until approved.
@@ -67,7 +73,9 @@ they are 100% accurate — no diarization guessing.
 - pack.py — transcript.json → packed.md (zh-TW reading view).
 - render.py — transcript.json + cuts.json → preview/final.mp3 + kept_transcript.json (per-track cut → mix).
 - qa.py — seam/silence check → qa_report.md.
-- ai_listen.py — optional Gemini clip classifier (cough vs laugh). [Phase 5]
+- ai_listen.py — Gemini sweep of the host track for throat/nose-clears: `sweep_track` →
+  `verify_on_track` (drop hallucinations) → `split_events` (mute gaps / flag co-articulated);
+  `classify` confirms a single clip. [Phase 5]
 
 ## Anti-patterns
 - Don't invent timestamps — always cite word ids from transcript.json.
