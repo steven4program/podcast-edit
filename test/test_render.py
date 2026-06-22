@@ -20,6 +20,24 @@ def test_resolve_word_cut_clamps_to_next_word_on_overlap():
     assert out[0]["end"] == 0.40
 
 
+def test_resolve_word_cut_extends_to_keep_onset_on_undermeasure():
+    # Scribe under-measures the broken syllable (我 = 20ms) and parks '-' at zero width.
+    # The cut must extend to the keep word's onset (0.30) so the stutter's sound is removed.
+    words = [{"id": 0, "text": "我", "start": 0.20, "end": 0.22, "speaker": "a"},
+             {"id": 1, "text": "-", "start": 0.22, "end": 0.22, "speaker": "a"},
+             {"id": 2, "text": "我以前", "start": 0.30, "end": 0.8, "speaker": "a"}]
+    out = r.resolve_cut_times([{"start_word": 0, "end_word": 1}], words)
+    assert out[0]["end"] == 0.30
+
+
+def test_resolve_word_cut_keeps_real_pause_after_end():
+    # A genuine >0.5s pause after end_word is NOT swallowed (next word is the continuation).
+    words = [{"id": 0, "text": "對", "start": 0.0, "end": 0.4, "speaker": "a"},
+             {"id": 1, "text": "然後", "start": 1.2, "end": 1.6, "speaker": "a"}]
+    out = r.resolve_cut_times([{"start_word": 0, "end_word": 0}], words)
+    assert out[0]["end"] == 0.4
+
+
 def test_resolve_event_cut_keeps_times():
     cuts = [{"type": "event", "start": 1.6, "end": 1.9, "reason": "cough"}]
     out = r.resolve_cut_times(cuts, sample_transcript()["words"])

@@ -15,12 +15,14 @@ def resolve_cut_times(cuts, words):
     for c in cuts:
         if c.get("start_word") is not None:
             start, end = by_id[c["start_word"]]["start"], by_id[c["end_word"]]["end"]
-            # Scribe word spans micro-overlap, so end_word's end can run a few ms past
-            # the next (kept) word's start and clip it (verify uses a 50ms eps for the
-            # same reason; remap doesn't). Clamp the cut to that word's start.
+            # Align the cut END to the next (kept) word's onset. Scribe both micro-overlaps
+            # (end_word.end runs past the keep word → clips it) AND under-measures short or
+            # broken syllables, parking the trailing '-' marker at zero width (end_word.end
+            # falls short → the stutter's sound survives, e.g. a 我 tagged 20ms). Snapping to
+            # the keep word's start fixes both; bounded to <0.5s so a real pause isn't eaten.
             nxt = by_id.get(c["end_word"] + 1)
-            if nxt is not None and nxt["start"] > start:
-                end = min(end, nxt["start"])
+            if nxt is not None and start < nxt["start"] < end + 0.5:
+                end = nxt["start"]
         else:
             start, end = c["start"], c["end"]
         out.append({**c, "start": start, "end": end})
