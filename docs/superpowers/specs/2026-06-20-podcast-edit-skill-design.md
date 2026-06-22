@@ -13,15 +13,38 @@ mechanical, dangerous work (transcription, sample-accurate cutting, signal QA).
 
 ## Primary success criteria
 
-Everything in this spec serves three goals, in priority order:
+Everything in this spec serves three goals:
 
-1. **Remove stutters and repeated words/sentences** — e.g. `我覺得 我覺得` → one `我覺得`;
-   `提到說就是就是這個東西` → one `就是`. This is the core, most frequent edit.
-2. **Remove throat-clearing and coughing from the cough-prone host** — precision-first,
-   never delete laughter.
+1. **Remove throat-clearing / nose-clearing / coughing from the cough-prone host.**
+   **This is the headline value of the whole skill.** The cough-prone host clears his
+   throat/nose almost continuously, and chasing every one of these by hand is where a human
+   editor spends the *majority* of their time on an episode. The entire reason this skill
+   exists is to take that burden off the editor — so success is measured first and foremost
+   by how much of this labor it removes. Therefore **recall is the value driver here**: every
+   throat-clear the skill misses is labor it failed to save. (Laughter is the one exception —
+   never delete it; see the precision rule below.)
+2. **Remove stutters and repeated words/sentences** — e.g. `我覺得 我覺得` → one `我覺得`;
+   `提到說就是就是這個東西` → one `就是`. The most frequent *verbal* edit.
 3. **The edited track sounds smooth** — no audible clicks, jumps, or unnatural seams.
 
 A build that nails these three is a success. Everything else is supporting machinery.
+
+### Known ceiling on goal 1 (co-articulated throat-clears)
+
+Empirically, the host's throat/nose-clears are mostly **co-articulated** — he clears while
+talking, so the sound overlaps his *own* words on his *own* track. Two consequences:
+
+- **Detection can't rely on energy.** RMS can't separate a soft nasal/throat sound from a
+  voiced syllable (both are just energy), so acoustic blob detection misses them. Only a
+  *perceptual* pass (Scribe events, or a Gemini clip sweep with far better recall) can find
+  them. Scribe's event tagger has poor recall on these soft sounds — it caught 3 of ~12 in a
+  test clip — so a Gemini discovery sweep over the host's track is the recall mechanism.
+- **Removal is bounded by overlap.** The multitrack mute superpower cleanly kills a throat-clear
+  that lands in a *gap* in the host's own speech (other speakers talking over it is fine —
+  muting only his track). But a throat-clear that fires *simultaneously with his own words*
+  cannot be removed by cutting or muting without taking the words with it. Cleaning those
+  needs **spectral denoise** (RNNoise / iZotope-class), which is signal processing, not
+  editing — **out of scope for v1**. Those are flagged for the human, not auto-removed.
 
 ---
 
@@ -35,8 +58,11 @@ A build that nails these three is a success. Everything else is supporting machi
   thing, cut lands elsewhere" bug.
 - **Audio is cheap — render, don't simulate.** Concatenating audio segments is seconds, so
   "preview" and "final" are the same fast render path. No custom dynamic-skip player.
-- **Precision over recall for destructive non-verbal cuts.** Wrongly deleting a laugh is far
-  worse than missing a soft cough. When unsure, keep + flag.
+- **Laughter is precision-first; throat-clears are recall-first.** Wrongly deleting a laugh
+  is unforgivable — when a sound could be a laugh, keep + flag. But for the host's
+  throat/nose-clears (goal 1), recall is the whole point: each one missed is editor labor not
+  saved, so the skill should hunt them aggressively (Gemini sweep over his track), removing
+  the gap ones and flagging the co-articulated ones it can't safely cut.
 - **Lean and ownable.** One skill, five helpers, one reference doc, one test. Every piece
   fits in your head.
 

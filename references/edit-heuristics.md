@@ -28,15 +28,24 @@ Scribe v2 marks these with `-` (e.g. `它最-最主要`, `K-Kinesis`) — strong
 Pre-show prep, off-topic chit-chat, tech debugging ("聽得到嗎"), repeated takes, privacy.
 Prefer boundaries at sentence/breath edges.
 
-## Non-verbal (cough/throat-clear) — precision-first
-- Source: transcript.json events (Scribe), already attributed to a speaker by track.
-- Candidates = type cough/throat_clear AND speaker == cough-prone host. Flag others, don't cut.
-- LAUGHTER IS NEVER A CANDIDATE (Scribe OR Gemini saying "laughter" → keep).
-- If GEMINI_API_KEY is set, confirm each candidate with `helpers.ai_listen.classify`; cut only
-  when it also says cough/throat_clear. (Gemini and Scribe disagree on soft sounds — require both.)
-- Remove a confirmed cough via a **mute** on the host's track (render `mutes=`): the cough
-  vanishes with no time removed and no effect on other speakers — speech-overlapping coughs
-  handled cleanly. Ambiguous → flag, never auto-cut.
+## Non-verbal (cough/throat-clear) — THE headline goal, recall-first
+This is where a human editor spends most of their time; removing it is the whole point of the
+skill. Hunt aggressively — the cough-prone host clears his throat/nose almost continuously.
+
+- **Recall, not just Scribe events.** Scribe's event tagger has poor recall on soft nasal/throat
+  sounds (caught 3 of ~12 in a test clip) and RMS energy can't tell a throat-clear from a
+  voiced syllable — so don't rely on `transcript.json` events alone. The recall mechanism is a
+  **Gemini sweep over the host's own track**: slice it into ~12s windows and ask Gemini to
+  timestamp every throat/nose-clear. Scribe events are a starting set, not the candidate list.
+- **Candidate = throat-clear/cough on the cough-prone host's track.** Flag other speakers' ones.
+- **LAUGHTER IS NEVER A CANDIDATE** (Scribe OR Gemini saying "laughter" → keep). This is the one
+  place precision beats recall: a wrongly-deleted laugh is unforgivable; a missed clear is not.
+- Confirm a candidate with `helpers.ai_listen.classify`; proceed only on cough/throat_clear.
+- **Removal is bounded by overlap with his OWN speech:**
+  - In a *gap* in his own words → **mute** his track for that span (render `mutes=`): vanishes
+    with no time removed, other speakers untouched (their overlap is fine — only his track mutes).
+  - *Co-articulated* (firing while he speaks his own words) → **flag, do NOT cut/mute** — muting
+    would take his words too. Cleaning these needs spectral denoise (out of scope v1).
 
 ## Dead air
 Ignore ≤0.5s. Consider >1s. Long silences also surface in QA.

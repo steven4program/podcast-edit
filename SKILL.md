@@ -12,9 +12,14 @@ Input is **multitrack**: one mono track per speaker (e.g. `…--ted35.wav` + `�
 all the same length/session. Speaker labels come from each filename's last `--` segment, so
 they are 100% accurate — no diarization guessing.
 
-## Primary goals (priority order)
-1. Remove stutters and repeated words/sentences (delete-earlier, keep-later).
-2. Remove throat-clearing/coughing from the cough-prone host (precision-first; never laughs). [Phase 5]
+## Primary goals
+1. **Remove throat-clearing/nose-clearing/coughing from the cough-prone host — the headline
+   value.** This is where a human editor spends most of their time, so removing it is the
+   whole point of the skill. **Recall-first**: hunt these aggressively (the host clears almost
+   continuously). Mute the ones that land in a gap in his own speech; flag the ones
+   co-articulated with his own words (cut/mute can't remove those without losing the words —
+   spectral denoise territory, out of scope). NEVER delete laughter. [Phase 5]
+2. Remove stutters and repeated words/sentences (delete-earlier, keep-later).
 3. Make the edited track sound smooth (no clicks/jumps/abrupt seams).
 
 ## Hard rules (never violate)

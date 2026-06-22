@@ -7,3 +7,63 @@ def test_parse_label_maps_keywords():
     assert ai.parse_label("laughter") == "laughter"
     assert ai.parse_label("normal speech") == "speech"
     assert ai.parse_label("unsure / music") == "other"
+
+
+def test_retry_after_parses_server_delay():
+    assert ai._retry_after("Please retry in 50.6s", 8.0) == 51.6
+    assert ai._retry_after("retryDelay': '50s'", 8.0) == 51.0
+    assert ai._retry_after("some other error", 8.0) == 8.0
+
+
+def test_windows_cover_duration_with_overlap():
+    w = ai._windows(25.0, 12.0, 11.0)
+    assert w[0] == (0.0, 12.0)
+    assert w[-1][1] == 25.0           # last window reaches the end
+    assert all(b - a <= 12.0 + 1e-9 for a, b in w)
+
+
+def test_parse_events_offsets_clamps_and_drops_laughter():
+    txt = '[{"start":1.0,"end":1.5,"type":"throat_clear"},' \
+          '{"start":2.0,"end":99.0,"type":"cough"},' \
+          '{"start":3.0,"end":3.4,"type":"laughter"}]'
+    evs = ai._parse_events(txt, offset=10.0, win_end=22.0)
+    assert [e["type"] for e in evs] == ["throat_clear", "cough"]   # laughter dropped
+    assert evs[0]["start"] == 11.0 and evs[0]["end"] == 11.5       # offset applied
+    assert evs[1]["end"] == 22.0                                   # clamped to win_end
+
+
+def test_parse_events_handles_junk():
+    assert ai._parse_events("no json here", 0.0, 12.0) == []
+    assert ai._parse_events("[broken", 0.0, 12.0) == []
+
+
+def test_merge_collapses_near_duplicates_from_overlap():
+    evs = [{"start": 11.2, "end": 11.6, "type": "throat_clear"},
+           {"start": 11.5, "end": 11.9, "type": "throat_clear"},  # overlaps prev -> merge
+           {"start": 30.0, "end": 30.3, "type": "cough"}]
+    m = ai._merge(evs)
+    assert len(m) == 2 and m[0]["end"] == 11.9
+
+
+def test_verify_on_track_drops_silent_hallucinations(tmp_path):
+    import numpy as np, soundfile as sf
+    sr = 16000
+    np.random.seed(0)
+    x = (1e-4 * np.random.randn(5 * sr)).astype(np.float32)   # faint noise floor everywhere
+    seg = slice(int(1.0 * sr), int(1.2 * sr))                 # a real burst at 1.0-1.2s
+    x[seg] += (0.2 * np.sin(2 * np.pi * 200 * np.arange(seg.stop - seg.start) / sr)).astype(np.float32)
+    wav = str(tmp_path / "host.wav"); sf.write(wav, x, sr)
+    events = [{"start": 1.0, "end": 1.2, "type": "throat_clear"},   # real -> keep
+              {"start": 3.0, "end": 3.2, "type": "throat_clear"}]   # at floor -> drop
+    kept = ai.verify_on_track(events, wav, k=5.0)
+    assert len(kept) == 1 and kept[0]["start"] == 1.0
+
+
+def test_split_events_gap_mutes_coarticulated_flags():
+    words = [{"id": 0, "text": "你好", "start": 5.0, "end": 5.4, "speaker": "ted35"},
+             {"id": 1, "text": "嗎", "start": 8.0, "end": 8.3, "speaker": "tony"}]
+    events = [{"start": 6.0, "end": 6.3, "type": "throat_clear"},   # gap in ted35 -> mute
+              {"start": 5.1, "end": 5.3, "type": "throat_clear"}]   # inside ted35 word -> flag
+    mutes, flagged = ai.split_events(events, words, host="ted35")
+    assert mutes == [{"speaker": "ted35", "start": 6.0, "end": 6.3}]
+    assert len(flagged) == 1 and flagged[0]["start"] == 5.1
