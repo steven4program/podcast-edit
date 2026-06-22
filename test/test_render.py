@@ -11,6 +11,15 @@ def test_resolve_word_cut_uses_exact_word_times():
     assert out[0]["start"] == 0.0 and out[0]["end"] == 0.4
 
 
+def test_resolve_word_cut_clamps_to_next_word_on_overlap():
+    # Scribe spans micro-overlap: end_word ends at 0.42 but the next (kept) word
+    # starts at 0.40. The cut must stop at 0.40 so word 1 survives remap.
+    words = [{"id": 0, "text": "你", "start": 0.0, "end": 0.42, "speaker": "a"},
+             {"id": 1, "text": "你好", "start": 0.40, "end": 0.9, "speaker": "a"}]
+    out = r.resolve_cut_times([{"start_word": 0, "end_word": 0}], words)
+    assert out[0]["end"] == 0.40
+
+
 def test_resolve_event_cut_keeps_times():
     cuts = [{"type": "event", "start": 1.6, "end": 1.9, "reason": "cough"}]
     out = r.resolve_cut_times(cuts, sample_transcript()["words"])
@@ -68,6 +77,20 @@ def test_snap_point_moves_to_silence_within_window():
 def test_snap_point_keeps_when_no_silence_in_window():
     new_t, snapped = r.snap_point(0.5, [(1.5, 2.2)], window=0.3)
     assert not snapped and new_t == 0.5
+
+
+def test_render_short_cut_not_collapsed_by_snap(tmp_path):
+    # A sub-0.1s stutter cut near a silence: if it snapped, both ends would grab the
+    # same edge and erase (or shift) the cut. Word-id cuts skip snapping, so word 1 goes.
+    wav, out = str(tmp_path / "in.wav"), str(tmp_path / "out.mp3")
+    make_test_wav(wav)  # silence at 1.5-2.2s
+    t = {"audio": wav, "duration": 4.0, "words": [
+        {"id": 0, "text": "這個", "start": 0.5, "end": 1.30, "speaker": "a"},
+        {"id": 1, "text": "這", "start": 1.30, "end": 1.38, "speaker": "a"},  # stutter frag
+        {"id": 2, "text": "種", "start": 1.38, "end": 1.50, "speaker": "a"}]}
+    r.render(t, [{"start_word": 1, "end_word": 1, "reason": "stutter"}], wav, out)
+    kept = {w["id"] for w in json.load(open(out.replace(".mp3", "_kept_transcript.json")))["words"]}
+    assert 1 not in kept and 0 in kept and 2 in kept
 
 
 # ── Task 2.2: render (single-file) ───────────────────────────────────────────

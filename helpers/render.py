@@ -15,6 +15,12 @@ def resolve_cut_times(cuts, words):
     for c in cuts:
         if c.get("start_word") is not None:
             start, end = by_id[c["start_word"]]["start"], by_id[c["end_word"]]["end"]
+            # Scribe word spans micro-overlap, so end_word's end can run a few ms past
+            # the next (kept) word's start and clip it (verify uses a 50ms eps for the
+            # same reason; remap doesn't). Clamp the cut to that word's start.
+            nxt = by_id.get(c["end_word"] + 1)
+            if nxt is not None and nxt["start"] > start:
+                end = min(end, nxt["start"])
         else:
             start, end = c["start"], c["end"]
         out.append({**c, "start": start, "end": end})
@@ -189,6 +195,11 @@ def render(transcript, cuts, audio_path, out_path, snap_window=0.3, mutes=None):
     silences = _snap_silences(sources, out_path)
     snapped_count = 0
     for c in resolved:
+        # Word-id cuts (repeats/stutters) are already on word edges — snapping a short
+        # intra-speech cut to a nearby silence drags it onto adjacent words. The mid-word
+        # guard + 3ms fades keep the seam clean. Only acoustic/segment cuts snap.
+        if c.get("start_word") is not None:
+            continue
         ns, s1 = safe_snap(c["start"], silences, words, snap_window)
         ne, s2 = safe_snap(c["end"], silences, words, snap_window)
         c["start"], c["end"] = ns, ne
