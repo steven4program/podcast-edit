@@ -97,6 +97,20 @@ def test_snap_point_keeps_when_no_silence_in_window():
     assert not snapped and new_t == 0.5
 
 
+def test_filler_cut_not_collapsed_by_snap(tmp_path):
+    # An acoustic filler (呃) sitting just inside silence: both ends would snap to the
+    # same edge and erase the cut, leaving the sound. The guard keeps the resolved span.
+    wav, out = str(tmp_path / "in.wav"), str(tmp_path / "out.mp3")
+    make_test_wav(wav)  # tone 0-1.5s, silence 1.5-2.2s, tone 2.2-3.7s
+    t = {"audio": wav, "duration": 4.0, "words": [
+        {"id": 0, "text": "好", "start": 0.5, "end": 1.40, "speaker": "a"},
+        {"id": 1, "text": "呃", "start": 1.55, "end": 1.80, "speaker": "a"},  # in the silence
+        {"id": 2, "text": "對", "start": 2.3, "end": 2.9, "speaker": "a"}]}
+    res = r.render(t, [{"type": "macro", "start": 1.55, "end": 1.80, "reason": "filler 呃"}], wav, out)
+    removed = 4.0 - sum(e - s for s, e in res["segments"])
+    assert removed > 0.15  # the ~0.25s filler span was actually removed, not snapped away
+
+
 def test_render_short_cut_not_collapsed_by_snap(tmp_path):
     # A sub-0.1s stutter cut near a silence: if it snapped, both ends would grab the
     # same edge and erase (or shift) the cut. Word-id cuts skip snapping, so word 1 goes.

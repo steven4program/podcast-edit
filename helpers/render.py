@@ -204,7 +204,9 @@ def render(transcript, cuts, audio_path, out_path, snap_window=0.3, mutes=None):
             continue
         ns, s1 = safe_snap(c["start"], silences, words, snap_window)
         ne, s2 = safe_snap(c["end"], silences, words, snap_window)
-        c["start"], c["end"] = ns, ne
+        if ne - ns < 0.5 * (c["end"] - c["start"]):  # both ends snapped to the same nearby
+            ns, ne, s1, s2 = c["start"], c["end"], False, False  # edge → would erase the cut
+        c["start"], c["end"] = ns, ne                            # (the sound); keep the span
         snapped_count += int(s1) + int(s2)
 
     segments = compute_kept_segments(resolved, duration)
