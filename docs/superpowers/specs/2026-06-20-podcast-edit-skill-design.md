@@ -252,4 +252,34 @@ the LLM consults — knowledge without machinery.
   behind the same JSON seam. (Scribe's zh-TW per-word timestamp granularity is verified on a
   real clip during the first run before committing.)
 - Existing `GEMINI_API_KEY` (from the old skill) is available for `ai_listen.py`.
+
+---
+
+## Amendment 2026-06-20 — Multitrack input
+
+Real input is **multitrack**, not a single mixed file: one time-aligned mono WAV per
+participant (e.g. `…--ted35.wav` host + three `…--guestNNN--<name>.wav` guests, all same
+length/session). This changes the design (for the better):
+
+- **Transcription:** transcribe **each track separately** (each track = exactly one speaker,
+  so Scribe diarization is OFF), then **merge** all word/event lists into one canonical
+  `transcript.json` sorted by `start` with global ids. Speaker label = derived from the
+  filename's last `--` segment (`…--tony.wav` → `tony`). This yields 100%-accurate speaker
+  labels for free — no diarization guessing. Cost ~4× Scribe (~$1.6/episode).
+- **Canonical transcript** gains a `tracks: [paths]` field (the mix sources). `audio` may be
+  empty for multitrack.
+- **Cough-prone host:** `ted35`. Cough/throat-clear detection focuses on the **host's track**
+  (events whose speaker == host), which is far more reliable than isolating a cough from a
+  4-way mix.
+- **Render (Phase 2) must mix down** the tracks. Verbal/time cuts apply to the mix. For host
+  coughs specifically, the multitrack superpower (Phase 5): **mute just the host's track** for
+  the cough span → the cough disappears with no time removed and no effect on other speakers.
+  Cleaner than any single-file cut. Coughs overlapping others' speech are handled naturally
+  (muting host track doesn't touch the guest).
+- **Risk to watch at Gate 1:** mic **bleed** — a track may faintly capture other speakers, and
+  Scribe could transcribe that bleed (producing duplicate words across tracks at the same
+  time). Check `packed.md` for doubled/cross-talk lines; if significant, add a pre-transcribe
+  noise gate / energy threshold per track.
+- Single-file transcription + Scribe diarization remains supported as a fallback for non-
+  multitrack sources.
 ```
