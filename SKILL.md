@@ -42,12 +42,13 @@ they are 100% accurate — no diarization guessing.
    Then `python -m helpers.pack edit/transcript.json > edit/packed.md`.
 2. Propose cuts — read `edit/packed.md` and `references/edit-heuristics.md`. Write
    `edit/cuts.json` as `{"cuts": [...], "mutes": [...]}`:
-   - Repeats/stutters (recall-first): run `python -m helpers.repeats edit/transcript.json`
-     for candidate delete-earlier cuts (adjacent duplicates, incl. `-`/`——` dash-stutters).
-     Don't eyeball packed.md for these — the finder is the recall pass. REVIEW each candidate
-     and drop the false positives: emphasis/rhetoric (`非常非常多`, parallelism like
-     `懂A懂B，懂B懂A`) and reduplicated words/names (`剛剛`, `萬萬`, `汪汪`). Keep the confirmed
-     ones. Add macro segment cuts (off-topic, retakes) by reading packed.md.
+   - Repeats/stutters/false-starts (recall-first): run `python -m helpers.repeats edit/transcript.json`.
+     It returns `repeats` (adjacent duplicates incl. `-` dash-stutters, delete-earlier) and
+     `false_starts` (`——` abandoned attempts). Don't eyeball packed.md for these — this is the
+     recall pass. REVIEW each and drop false positives: reduplicated words/names (`剛剛`, `萬萬`,
+     `汪汪`), emphasis/rhetoric (`非常非常多`, `懂A懂B懂B懂A`). For a `false_start` flagged ⚠,
+     extend the span if the abandoned fragment is longer than the 1-token guess (`我覺得——`, not
+     `得——`). Keep the confirmed ones. Add macro segment cuts (off-topic, retakes) from packed.md.
    - Fillers: use `helpers.fillers.propose_filler_cuts` (Scribe filler timestamps are
      unreliable; it finds the sound acoustically and flags the unsafe ones).
    - Cough/throat-clear (THE headline goal, recall-first; needs `GEMINI_API_KEY`): Scribe's
@@ -76,7 +77,7 @@ they are 100% accurate — no diarization guessing.
 ## Helpers
 - transcribe.py — multitrack dir (or single file) → transcript.json (words+speaker+events).
 - pack.py — transcript.json → packed.md (zh-TW reading view).
-- repeats.py — adjacent-duplicate finder (recall aid for repeats/stutters); LLM reviews candidates.
+- repeats.py — adjacent-duplicate + `——` false-start finder (recall aid); LLM reviews candidates.
 - render.py — transcript.json + cuts.json → preview/final.mp3 + kept_transcript.json (per-track cut → mix).
 - qa.py — seam/silence check → qa_report.md.
 - ai_listen.py — Gemini sweep of the host track for throat/nose-clears: `sweep_track` →

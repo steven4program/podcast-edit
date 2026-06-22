@@ -11,6 +11,7 @@ import json, re
 
 _STRIP = "，。、！？…—–-　 .,!?；：「」（）()"
 _FILLERS = ("呃", "嗯", "啊", "欸")
+_DASH = ("——", "—", "–", "ーー")  # abandon / trailing-off markers ('-' is handled as a repeat)
 
 
 def _norm(text):
@@ -49,7 +50,39 @@ def find_repeats(words, max_phrase=6):
     return out
 
 
+def find_false_starts(words, lookback=4):
+    """Abandoned attempts marked by a '——' em-dash → propose removing the abandoned
+    fragment + dash, keeping what comes after. When the speaker RESTARTS by repeating a
+    token across the dash (它非——它花: 它 repeats), the fragment's start is known, so the
+    span is precise. Otherwise the fragment length is ambiguous, so emit a 1-token best
+    guess flagged for span review (correct for 斯——/在——/不——, needs extending for 我覺得——).
+    Recall aid like find_repeats — the LLM confirms the cut and the span."""
+    out = []
+    for di, d in enumerate(words):
+        if d["text"].strip() not in _DASH:
+            continue
+        spk = d["speaker"]
+        post = next((w for w in words[di + 1:] if _is_content(w["text"])), None)
+        if post is None or post["speaker"] != spk:      # dash at a clean end / speaker change
+            continue
+        pre = [w for w in words[:di] if _is_content(w["text"]) and w["speaker"] == spk]
+        if not pre:
+            continue
+        pn = _norm(post["text"])
+        hit = next((w for w in reversed(pre[-lookback:]) if _norm(w["text"]) == pn), None)
+        if hit:                                          # restart-repeat → precise span
+            frag = "".join(_norm(x["text"]) for x in pre if x["id"] >= hit["id"])
+            out.append({"type": "micro", "start_word": hit["id"], "end_word": d["id"],
+                        "reason": f"false start 「{frag}——」 restart 「{pn}」 #{post['id']} — keep later"})
+        else:                                            # bare abandon → flag span for review
+            prev = pre[-1]
+            out.append({"type": "micro", "start_word": prev["id"], "end_word": d["id"],
+                        "reason": f"false start 「{_norm(prev['text'])}——」? ⚠ extend span if longer — keep 「{pn}」 #{post['id']}"})
+    return out
+
+
 if __name__ == "__main__":
     import sys
     t = json.load(open(sys.argv[1]))
-    print(json.dumps(find_repeats(t["words"]), ensure_ascii=False, indent=2))
+    print(json.dumps({"repeats": find_repeats(t["words"]),
+                      "false_starts": find_false_starts(t["words"])}, ensure_ascii=False, indent=2))

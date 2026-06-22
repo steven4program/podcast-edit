@@ -38,3 +38,22 @@ def test_ignores_cross_speaker_and_nonadjacent():
     # 各自有各自 — the two 各自 are not adjacent (有 between)
     assert rp.find_repeats(W(("各", "a"), ("自", "a"), ("有", "a"),
                              ("各", "a"), ("自", "a"))) == []
+
+
+def test_false_start_restart_repeat_is_precise():
+    # 它非——它花: 它 repeats across the dash → remove 它非—— (#0-2), keep restart 它花 (#3)
+    words = W(("它", "a"), ("非", "a"), ("——", "a"), ("它", "a"), ("花", "a"))
+    fs = rp.find_false_starts(words)
+    assert (fs[0]["start_word"], fs[0]["end_word"]) == (0, 2)
+
+
+def test_false_start_bare_abandon_flags_one_token_span():
+    # 的斯——那個: no restart-repeat → 1-token guess (斯——, #1-2), keep 那個 (#3)
+    words = W(("的", "a"), ("斯", "a"), ("——", "a"), ("那", "a"), ("個", "a"))
+    fs = rp.find_false_starts(words)
+    assert (fs[0]["start_word"], fs[0]["end_word"]) == (1, 2)
+
+
+def test_dash_at_clean_end_is_skipped():
+    # dash then a different speaker → not a false start
+    assert rp.find_false_starts(W(("好", "a"), ("——", "a"), ("對", "b"))) == []

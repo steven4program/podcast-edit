@@ -26,7 +26,10 @@ Adjacent duplicated word/phrase (exact or near-exact) → keep ONE, the LATER in
 
 ## Stutters / false starts
 Partial-word repeats and abandoned starts → remove the broken attempt, keep the clean one.
-Scribe v2 marks these with `-` (e.g. `它最-最主要`, `K-Kinesis`) — strong stutter signal.
+Scribe v2 marks intra-word stutters with `-` (`它最-最主要`, `K-Kinesis`) — caught by
+`find_repeats` as a duplicate. Abandoned attempts trail off with `——`; `find_false_starts`
+surfaces them — precise when the speaker restarts by repeating a word across the dash
+(`它非——它花`), else a flagged 1-token guess you extend if the fragment is longer (`我覺得——`).
 
 ## Macro deletions (segment-level)
 Pre-show prep, off-topic chit-chat, tech debugging ("聽得到嗎"), repeated takes, privacy.
