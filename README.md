@@ -1,3 +1,5 @@
+English | [繁體中文](README.zh-TW.md)
+
 # podcast-edit
 
 Lean Claude Code skill for editing zh-TW (Mandarin) multitrack audio podcasts: removes

@@ -58,4 +58,6 @@ network or API calls in tests).
 - **Don't break render's invariants** (word-id-only timing, the mid-word guard, 3ms fades,
   onset-alignment, no-snap for micro cuts). They are the seam guarantee; `test_render.py` locks
   them — run it after any render change.
+- `README.md` (English) and `README.zh-TW.md` (繁中) are parallel — update **both** when either
+  changes.
 - Commit at a working checkpoint with a clear, scoped message; keep diffs surgical.
