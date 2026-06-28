@@ -192,6 +192,7 @@ def _speaker(path):
 def render(transcript, cuts, audio_path, out_path, snap_window=0.3, mutes=None):
     words, duration = transcript["words"], transcript["duration"]
     sources = transcript.get("tracks") or [audio_path]
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)  # work/ or out/
     resolved = resolve_cut_times(cuts, words)
 
     silences = _snap_silences(sources, out_path)

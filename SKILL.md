@@ -35,12 +35,17 @@ they are 100% accurate — no diarization guessing.
 8. Source tracks untouched. All artifacts under `<audio_dir>/edit/`.
 
 ## Workflow
+Artifacts live under `<audio_dir>/edit/`, in three tiers (helpers create the subdirs on write):
+**top** = durable state (`transcript.json`, `cuts.json`, `project.md`); **`edit/work/`** =
+regeneratable intermediates (`*_raw.json`, `packed.md`, `preview.mp3`); **`edit/out/`** =
+deliverables (`final.mp3`, `chapters.txt`).
+
 0. Setup — confirm `ffmpeg` + `ELEVENLABS_API_KEY`. Ask the user the cough-prone host name.
 1. Transcribe — `python -m helpers.transcribe <tracks_dir> edit/transcript.json` (per-track
    Scribe v2 with a VAD silence pre-pass + merge). On the first episode, confirm a
-   `edit/transcript_<speaker>_raw.json` is per-word zh-TW with matching event tags.
-   Then `python -m helpers.pack edit/transcript.json > edit/packed.md`.
-2. Propose cuts — read `edit/packed.md` and `references/edit-heuristics.md`. Write
+   `edit/work/transcript_<speaker>_raw.json` is per-word zh-TW with matching event tags.
+   Then `python -m helpers.pack edit/transcript.json > edit/work/packed.md`.
+2. Propose cuts — read `edit/work/packed.md` and `references/edit-heuristics.md`. Write
    `edit/cuts.json` as `{"cuts": [...], "mutes": [...]}`:
    - Repeats/stutters/false-starts (recall-first): run `python -m helpers.repeats edit/transcript.json`.
      It returns `repeats` (adjacent duplicates incl. `-` dash-stutters, delete-earlier) and
@@ -65,13 +70,14 @@ they are 100% accurate — no diarization guessing.
          words too (spectral denoise is out of scope — see the roadmap in the design spec).
      LAUGHTER IS NEVER A CANDIDATE.
    Present a grouped list: `[mm:ss] removed text/sound — reason`, plus the `flagged.md` items.
-3. Review gate — `python -m helpers.render edit/transcript.json edit/cuts.json edit/preview.mp3`.
+3. Review gate — `python -m helpers.render edit/transcript.json edit/cuts.json edit/work/preview.mp3`.
    (Tracks are read from transcript.json; for a single-file source pass `--audio <file>`.)
    User reads the list and listens. Apply changes to cuts.json, re-render. Loop until approved.
-4. Final render — same command → `edit/final.mp3` (+ `edit/final_kept_transcript.json`).
-   Seams are clean by construction (render's mid-word guard + 3ms fade per join), so there is
-   no signal-level QA step — an RMS-ratio seam check only re-flags normal pause→speech.
-5. Chapters — read `edit/final_kept_transcript.json`, write `edit/chapters.txt` (`mm:ss Title`).
+4. Final render — `python -m helpers.render edit/transcript.json edit/cuts.json edit/out/final.mp3`
+   (+ `edit/out/final_kept_transcript.json`). Seams are clean by construction (render's mid-word
+   guard + 3ms fade per join), so there is no signal-level QA step — an RMS-ratio seam check
+   only re-flags normal pause→speech.
+5. Chapters — read `edit/out/final_kept_transcript.json`, write `edit/out/chapters.txt` (`mm:ss Title`).
 6. Memory — append a one-line summary to `edit/project.md`.
 
 ## Helpers

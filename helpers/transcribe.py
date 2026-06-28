@@ -176,14 +176,23 @@ def _scribe(wav_path, language, diarize):
     return resp.json()
 
 
+def _raw_path(out_path, suffix):
+    """Raw Scribe dumps are debug intermediates → a work/ subdir next to the transcript."""
+    work = os.path.join(os.path.dirname(out_path) or ".", "work")
+    os.makedirs(work, exist_ok=True)
+    stem = os.path.splitext(os.path.basename(out_path))[0]
+    return os.path.join(work, f"{stem}{suffix}")
+
+
 def transcribe(audio_path, out_path, language="zho"):
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     wav = _extract_wav(audio_path)
     try:
         raw = _scribe(wav, language, diarize=True)
     finally:
         os.remove(wav)
     raw["audio"] = audio_path
-    with open(out_path.replace(".json", "_raw.json"), "w") as f:
+    with open(_raw_path(out_path, "_raw.json"), "w") as f:
         json.dump(raw, f, ensure_ascii=False, indent=2)
     transcript = normalize_scribe(raw)
     transcript["audio"] = audio_path
@@ -193,7 +202,7 @@ def transcribe(audio_path, out_path, language="zho"):
 
 
 def transcribe_multitrack(track_paths, out_path, language="zho"):
-    base = out_path.replace(".json", "")
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     normalized = []
     for path in track_paths:
         speaker = speaker_from_filename(path)
@@ -208,8 +217,7 @@ def transcribe_multitrack(track_paths, out_path, language="zho"):
         finally:
             os.remove(wav)
         raw["audio"] = path
-        raw_out = f"{base}_{speaker}_raw.json"
-        with open(raw_out, "w") as f:
+        with open(_raw_path(out_path, f"_{speaker}_raw.json"), "w") as f:
             json.dump(raw, f, ensure_ascii=False, indent=2)
         norm = normalize_scribe(raw, speaker=speaker)
         normalized.append(_remap_transcript(norm, segments))
