@@ -6,7 +6,7 @@ description: Edit a zh-TW audio podcast — remove stutters/repeats, host coughs
 # Podcast Edit
 
 You edit zh-TW podcast audio. You make the editorial judgments by reading text;
-thin helpers do transcription, cutting, and QA. Work in the folder containing the audio.
+thin helpers do transcription, cutting, and rendering. Work in the folder containing the audio.
 
 Input is **multitrack**: one mono track per speaker (e.g. `…--ted35.wav` + `…--guestNNN--<name>.wav`),
 all the same length/session. Speaker labels come from each filename's last `--` segment, so
@@ -69,17 +69,16 @@ they are 100% accurate — no diarization guessing.
    (Tracks are read from transcript.json; for a single-file source pass `--audio <file>`.)
    User reads the list and listens. Apply changes to cuts.json, re-render. Loop until approved.
 4. Final render — same command → `edit/final.mp3` (+ `edit/final_kept_transcript.json`).
-5. QA — `python -m helpers.qa edit/final.mp3 edit/final_kept_transcript.json edit/qa_report.md`.
-   Review flagged seams. Issues → back to step 3.
-6. Chapters — read `edit/final_kept_transcript.json`, write `edit/chapters.txt` (`mm:ss Title`).
-7. Memory — append a one-line summary to `edit/project.md`.
+   Seams are clean by construction (render's mid-word guard + 3ms fade per join), so there is
+   no signal-level QA step — an RMS-ratio seam check only re-flags normal pause→speech.
+5. Chapters — read `edit/final_kept_transcript.json`, write `edit/chapters.txt` (`mm:ss Title`).
+6. Memory — append a one-line summary to `edit/project.md`.
 
 ## Helpers
 - transcribe.py — multitrack dir (or single file) → transcript.json (words+speaker+events).
 - pack.py — transcript.json → packed.md (zh-TW reading view).
 - repeats.py — adjacent-duplicate + `——` false-start finder (recall aid); LLM reviews candidates.
 - render.py — transcript.json + cuts.json → preview/final.mp3 + kept_transcript.json (per-track cut → mix).
-- qa.py — seam/silence check → qa_report.md.
 - ai_listen.py — Gemini sweep of the host track for throat/nose-clears: `sweep_track` →
   `verify_on_track` (drop hallucinations) → `split_events` (mute gaps / flag co-articulated);
   `classify` confirms a single clip. [Phase 5]
