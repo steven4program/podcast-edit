@@ -229,7 +229,8 @@ def render(transcript, cuts, audio_path, out_path, snap_window=0.3, mutes=None):
                    check=True, capture_output=True)
 
     kept = {"words": remap_words(words, segments), "segments": segments}
-    with open(out_path.replace(".mp3", "_kept_transcript.json"), "w") as f:
+    kept_path = os.path.splitext(out_path)[0] + "_kept_transcript.json"  # robust to non-.mp3 out
+    with open(kept_path, "w") as f:
         json.dump(kept, f, ensure_ascii=False, indent=2)
     return {"segments": segments, "snapped": snapped_count, "flagged": flagged}
 

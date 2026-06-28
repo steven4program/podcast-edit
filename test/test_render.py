@@ -139,6 +139,17 @@ def test_render_output_duration_matches_kept(tmp_path):
     assert abs(r.probe_duration(out) - expected) < 0.3  # no drift / no extra audio
 
 
+def test_render_kept_path_robust_to_non_mp3_out(tmp_path):
+    # out is .wav: kept_transcript must derive from the stem, not clobber the audio
+    # (the old .replace(".mp3",…) would have written JSON over out.wav).
+    wav, out = str(tmp_path / "in.wav"), str(tmp_path / "out.wav")
+    make_test_wav(wav)
+    t = sample_transcript(); t["audio"] = wav
+    r.render(t, [{"type": "micro", "start_word": 0, "end_word": 0, "reason": "x"}], wav, out)
+    assert r.probe_duration(out) > 0  # audio intact, not overwritten by JSON
+    assert os.path.exists(str(tmp_path / "out_kept_transcript.json"))
+
+
 # ── Task 2.2: render (multitrack — per-track cut then mix) ────────────────────
 def test_render_mute_silences_span_without_removing_time(tmp_path):
     import numpy as np, soundfile as sf
