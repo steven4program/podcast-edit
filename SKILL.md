@@ -36,9 +36,10 @@ they are 100% accurate — no diarization guessing.
 
 ## Workflow
 Artifacts live under `<audio_dir>/edit/`, in three tiers (helpers create the subdirs on write):
-**top** = durable state (`transcript.json`, `cuts.json`, `project.md`); **`edit/work/`** =
-regeneratable intermediates (`*_raw.json`, `packed.md`, `preview.mp3`); **`edit/out/`** =
-deliverables (`final.mp3`, `chapters.txt`).
+**top** = state & reports you keep or act on (`transcript.json`, `cuts.json`, `project.md`,
+`flagged.md`); **`edit/work/`** = regeneratable intermediates (`*_raw.json`, `packed.md`,
+`preview.mp3`); **`edit/out/`** = deliverables (`final.mp3`, `chapters.txt`). Helpers `makedirs`
+their own output dir, but `flagged.md` is written by you in step 2 — top always exists by then.
 
 0. Setup — confirm `ffmpeg` + `ELEVENLABS_API_KEY`. Ask the user the cough-prone host name.
 1. Transcribe — `python -m helpers.transcribe <tracks_dir> edit/transcript.json` (per-track
