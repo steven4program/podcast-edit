@@ -3,17 +3,19 @@ English | [繁體中文](README.zh-TW.md)
 # podcast-edit
 
 Lean Claude Code skill for editing zh-TW (Mandarin) multitrack audio podcasts: removes
-stutters / repeats / false-starts and the host's coughs / throat-clears, then renders a smooth
-track. The LLM makes the editorial calls by reading text; thin Python helpers transcribe,
+stutters / repeats / false-starts and the host's coughs / throat-clears, then renders a smooth,
+loudness-leveled track (per-speaker speech leveling + -16 LUFS). The LLM makes the editorial calls by reading text; thin Python helpers transcribe,
 detect, and render.
 
 ## Setup
 ```
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[ai,dev]"
-cp .env.example .env   # ELEVENLABS_API_KEY (transcription) + GEMINI_API_KEY (cough detection)
+cp .env.example .env   # ELEVENLABS_API_KEY (transcription) + a cough-detection provider key
+                       # (AI_PROVIDER=gemini + GEMINI_API_KEY; OpenAI backend currently disabled)
 ```
-Requires `ffmpeg` / `ffprobe` on PATH.
+Requires `ffmpeg` / `ffprobe` on PATH. Cross-platform (macOS/Linux/Windows) — helpers force
+UTF-8 I/O and store source paths posix-style so a transcript works on either OS.
 
 ## Use
 It's a Claude Code skill. Run it from the folder holding your audio tracks (one mono file per

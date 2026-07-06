@@ -35,6 +35,18 @@ surfaces them — precise when the speaker restarts by repeating a word across t
 Pre-show prep, off-topic chit-chat, tech debugging ("聽得到嗎"), repeated takes, privacy.
 Prefer boundaries at sentence/breath edges.
 
+**Pre-show chatter is cut BY DEFAULT.** Every episode starts with off-air chat before the
+host's show-opening greeting — a line like 「嗨，大家好，歡迎來到今天節目，我是…」 (wording
+varies: may start with 欸/哈囉, may name the show or co-hosts; it's the first
+address-the-audience sentence). Find that greeting in packed.md and cut with ONE
+**time-based macro cut**: `{"type":"macro","start":0.0,"end":<greeting word's start>}` —
+NOT a word-id cut ending at the previous word. A word-id cut ends at the last chat word's
+END, and the word-less tail between it and the greeting (breaths, chair noise, trailing
+sounds — often several seconds) survives into the output. The end time cites the greeting
+word's `start` from transcript.json, so it is still transcript-derived. It subsumes any
+micro cuts and mutes inside the span — drop those. If no greeting can be found, ask the
+user where the show starts instead of guessing.
+
 ## Non-verbal (cough/throat-clear) — THE headline goal, recall-first
 This is where a human editor spends most of their time; removing it is the whole point of the
 skill. Hunt aggressively — the cough-prone host clears his throat/nose almost continuously.
@@ -55,7 +67,11 @@ skill. Hunt aggressively — the cough-prone host clears his throat/nose almost 
     would take his words too. Cleaning these needs spectral denoise (out of scope v1).
 
 ## Dead air
-Ignore ≤0.5s. Consider >1s. Long silences also surface in QA.
+Ignore ≤0.5s. Recall comes from `helpers.deadair` (word-union gaps ≥1.2s → shorten to 0.8s,
+half kept on each side; laughter-covered pauses are never proposed — laughter is content).
+Review each proposal: keep a pause doing dramatic work (a beat before a punchline, letting a
+point land). Note the scan runs on the ORIGINAL timeline — cuts that join two silences can
+still leave a longer-than-ideal pause in the output; spot-check the preview if rhythm matters.
 
 ## Multitrack reality (this project)
 Input is one mono track per speaker; transcript.json is the merge of all tracks on one
