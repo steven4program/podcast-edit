@@ -1,17 +1,22 @@
-"""Gemini clip classifier + throat-clear discovery sweep for the cough-prone host.
+"""Audio-LLM clip classifier + throat-clear discovery sweep for the cough-prone host.
 
 The host's throat/nose-clears are the headline edit (most of an editor's time). Scribe's
 event tagger has poor recall on these soft sounds and RMS energy can't tell a throat-clear
-from a voiced syllable — so the recall mechanism is a Gemini sweep over the host's OWN track:
-slice into windows, ask Gemini to timestamp every throat/nose-clear/cough, then split the
-hits into (a) ones in a gap in his own speech -> safe to mute, and (b) ones co-articulated
-with his own words -> flag (cut/mute can't remove those without losing the words).
+from a voiced syllable — so the recall mechanism is an audio-LLM sweep over the host's OWN
+track: slice into windows, ask the model to timestamp every throat/nose-clear/cough, then
+split the hits into (a) ones in a gap in his own speech -> safe to mute, and (b) ones
+co-articulated with his own words -> flag (cut/mute can't remove those without losing words).
+
+The model is a pluggable provider (Gemini / OpenAI / …) — see ai_providers.py. sweep_track
+and classify take a provider object (dependency injection) so the detection logic here is
+backend-agnostic and unit-testable with a fake provider (no network in tests).
 
 Laughter is NEVER a candidate: any 'laughter' label means keep.
 """
 import json, os, re, subprocess, sys, tempfile, time
 
 from .render import probe_duration, _protected
+from .ai_providers import get_provider
 
 _KEYWORDS = [("throat", "throat_clear"), ("nose", "throat_clear"), ("sniff", "throat_clear"),
              ("cough", "cough"), ("laugh", "laughter"), ("breath", "breath"),
@@ -48,17 +53,14 @@ def _extract_clip(audio_path, start, end):
     return clip
 
 
-def classify(audio_path, start, end, model="gemini-2.5-flash", tries=3):
-    from google import genai
+def classify(audio_path, start, end, provider=None, tries=3):
+    provider = provider or get_provider()
     clip = _extract_clip(audio_path, start, end)
     try:
-        client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-        uploaded = client.files.upload(file=clip)
         last = None
         for i in range(tries):
             try:
-                resp = client.models.generate_content(model=model, contents=[_PROMPT, uploaded])
-                return parse_label(resp.text)
+                return parse_label(provider.generate(_PROMPT, clip))
             except Exception as e:  # transient API/file-state errors -> back off and retry
                 last = e
                 time.sleep(_retry_after(e, 2.0))
@@ -146,12 +148,35 @@ def split_events(events, words, host, eps=0.05):
     return mutes, flagged
 
 
-def sweep_track(audio_path, window=12.0, hop=11.0, model="gemini-2.5-flash",
+def scribe_events(transcript, host, pad=0.3):
+    """Keyless cough/throat-clear candidates: reuse the Scribe audio-event tags already
+    in transcript.json (tag_audio_events comes free with transcription). Much lower
+    recall than an audio-LLM sweep — on a test episode Scribe tagged 13 clears where the
+    sweep found 38, with almost no overlap — so this is the fallback when no provider
+    key is available (or the user asks for Scribe-only). Scribe often parks a tag at
+    zero width, so events are padded — but the padding is clipped at the host's own word
+    boundaries: only the RAW tag span decides mute-vs-flag in split_events, padding into
+    a neighbouring word must not fake a co-articulation."""
+    hw = [w for w in transcript.get("words", [])
+          if w.get("speaker") == host and _protected(w)]
+    out = []
+    for ev in transcript.get("events", []):
+        if ev.get("speaker") != host or ev.get("type") not in ("throat_clear", "cough"):
+            continue
+        prev_end = max((w["end"] for w in hw if w["end"] <= ev["start"]), default=0.0)
+        next_start = min((w["start"] for w in hw if w["start"] >= ev["end"]), default=float("inf"))
+        s = min(max(ev["start"] - pad, prev_end, 0.0), ev["start"])
+        e = max(min(ev["end"] + pad, next_start), ev["end"])
+        out.append({"start": round(s, 3), "end": round(e, 3), "type": ev["type"]})
+    return _merge(out)
+
+
+def sweep_track(audio_path, provider=None, window=12.0, hop=11.0,
                 throttle=7.0, tries=4, max_requests=None):
-    """Throttle between windows for free-tier RPM (set 0 on paid tier); on a 429 honor the
-    server's retryDelay. max_requests is a hard cost cap on Gemini calls per run."""
-    from google import genai
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    """Sweep the track for throat/nose-clears via `provider` (default: get_provider()).
+    Throttle between windows for free-tier RPM (set 0 on paid tier); on a 429 honor the
+    server's retryDelay. max_requests is a hard cost cap on model calls per run."""
+    provider = provider or get_provider()
     wins = _windows(probe_duration(audio_path), window, hop)
     if max_requests is not None and len(wins) > max_requests:
         print(f"sweep: capping {len(wins)} windows to max_requests={max_requests} "
@@ -163,14 +188,10 @@ def sweep_track(audio_path, window=12.0, hop=11.0, model="gemini-2.5-flash",
             time.sleep(throttle)
         clip = _extract_clip(audio_path, s, e)
         try:
-            uploaded = client.files.upload(file=clip)
             last = None
             for i in range(tries):
                 try:
-                    resp = client.models.generate_content(
-                        model=model, contents=[_SWEEP_PROMPT, uploaded],
-                        config={"response_mime_type": "application/json"})
-                    events += _parse_events(resp.text, s, e)
+                    events += _parse_events(provider.generate(_SWEEP_PROMPT, clip, json_mode=True), s, e)
                     break
                 except Exception as ex:
                     last = ex
@@ -186,15 +207,22 @@ if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser(description="Sweep the host's track for throat/nose-clears.")
     p.add_argument("host_track"); p.add_argument("transcript"); p.add_argument("host")
-    p.add_argument("--model", default="gemini-2.5-flash")
+    p.add_argument("--provider", default=None,
+                   help="gemini (default: $AI_PROVIDER or gemini; openai disabled) | "
+                        "scribe = keyless, reuse transcript.json's Scribe event tags (low recall)")
+    p.add_argument("--model", default=None, help="override the provider's default model")
     p.add_argument("--throttle", type=float, default=7.0, help="sleep between windows; 0 on paid tier")
     p.add_argument("--window", type=float, default=12.0)
     p.add_argument("--hop", type=float, default=11.0)
-    p.add_argument("--max-requests", type=int, default=None, help="hard cap on Gemini calls (cost)")
+    p.add_argument("--max-requests", type=int, default=None, help="hard cap on model calls (cost)")
     a = p.parse_args()
-    t = json.load(open(a.transcript))
-    events = sweep_track(a.host_track, window=a.window, hop=a.hop, model=a.model,
-                         throttle=a.throttle, max_requests=a.max_requests)
+    t = json.load(open(a.transcript, encoding="utf-8"))
+    if a.provider == "scribe":
+        events = scribe_events(t, a.host)
+    else:
+        provider = get_provider(a.provider, a.model)
+        events = sweep_track(a.host_track, provider, window=a.window, hop=a.hop,
+                             throttle=a.throttle, max_requests=a.max_requests)
     events = verify_on_track(events, a.host_track)   # drop silent-window hallucinations
     mutes, flagged = split_events(events, t["words"], a.host)
     print(json.dumps({"found": len(events), "mutes": mutes, "flagged": flagged},

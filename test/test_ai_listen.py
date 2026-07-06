@@ -59,6 +59,31 @@ def test_verify_on_track_drops_silent_hallucinations(tmp_path):
     assert len(kept) == 1 and kept[0]["start"] == 1.0
 
 
+def test_scribe_events_filters_pads_and_merges():
+    t = {"events": [
+        {"type": "throat_clear", "start": 10.0, "end": 10.0, "speaker": "ted"},  # zero-width
+        {"type": "cough", "start": 10.4, "end": 10.6, "speaker": "ted"},         # near prev -> merge
+        {"type": "laughter", "start": 20.0, "end": 20.5, "speaker": "ted"},      # never a candidate
+        {"type": "throat_clear", "start": 30.0, "end": 30.2, "speaker": "tony"}, # other speaker
+    ]}
+    evs = ai.scribe_events(t, "ted", pad=0.3)
+    assert len(evs) == 1                       # laughter + other speaker excluded, pair merged
+    assert evs[0]["start"] == 9.7 and evs[0]["end"] == 10.9  # padded both ways
+
+
+def test_scribe_events_padding_stops_at_host_words():
+    # The tag sits in a gap between the host's words; padding must clip at the word
+    # edges so split_events still sees a gap event (mute), not a fake co-articulation.
+    t = {"words": [{"id": 0, "text": "好", "start": 9.0, "end": 9.9, "speaker": "ted"},
+                   {"id": 1, "text": "嗯", "start": 10.5, "end": 10.7, "speaker": "ted"},  # filler: no clip
+                   {"id": 2, "text": "對", "start": 11.1, "end": 11.5, "speaker": "ted"}],
+         "events": [{"type": "cough", "start": 10.0, "end": 10.9, "speaker": "ted"}]}
+    evs = ai.scribe_events(t, "ted", pad=0.3)
+    assert evs == [{"start": 9.9, "end": 11.1, "type": "cough"}]
+    mutes, flagged = ai.split_events(evs, t["words"], host="ted")
+    assert len(mutes) == 1 and not flagged
+
+
 def test_split_events_gap_mutes_coarticulated_flags():
     words = [{"id": 0, "text": "你好", "start": 5.0, "end": 5.4, "speaker": "ted35"},
              {"id": 1, "text": "嗎", "start": 8.0, "end": 8.3, "speaker": "tony"}]
