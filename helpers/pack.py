@@ -41,4 +41,4 @@ def pack(transcript, gap=0.5):
 
 if __name__ == "__main__":
     import json, sys
-    print(pack(json.load(open(sys.argv[1]))))
+    print(pack(json.load(open(sys.argv[1], encoding="utf-8"))))

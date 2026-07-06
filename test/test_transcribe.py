@@ -17,6 +17,12 @@ def _raw():
     ]}
 
 
+def test_posix_normalizes_backslash_paths():
+    # transcript.json written on Windows must resolve on macOS/Linux -> forward slashes.
+    assert tr._posix("source\\2026-06-08--ted35.wav") == "source/2026-06-08--ted35.wav"
+    assert tr._posix("source/a.wav") == "source/a.wav"  # already-posix unchanged
+
+
 def test_normalize_assigns_word_ids_and_skips_nonwords():
     t = tr.normalize_scribe(_raw())
     assert [w["id"] for w in t["words"]] == [0, 1]
@@ -123,3 +129,17 @@ def test_merge_tracks_sorts_and_reids():
     assert [w["speaker"] for w in merged["words"]] == ["a", "b", "a"]
     assert merged["duration"] == 1.5
     assert [e["type"] for e in merged["events"]] == ["cough", "laughter"]
+
+
+def test_normalize_clamps_junk_word_durations():
+    # Scribe emitted a single-char 股 spanning ~98s; such a word covers a minute of
+    # timeline and the mid-word guard then blocks every cut inside it. The end must be
+    # capped to a per-character budget; a normal word's end passes through untouched.
+    from helpers.transcribe import normalize_scribe
+    raw = {"words": [
+        {"type": "word", "text": "股", "start": 349.0, "end": 447.0},
+        {"type": "word", "text": "你好", "start": 448.0, "end": 448.5},
+    ]}
+    t = normalize_scribe(raw, speaker="a")
+    assert t["words"][0]["end"] <= 349.0 + 1.0   # 98s junk clamped hard
+    assert t["words"][1]["end"] == 448.5         # normal duration untouched

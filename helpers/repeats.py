@@ -83,6 +83,6 @@ def find_false_starts(words, lookback=4):
 
 if __name__ == "__main__":
     import sys
-    t = json.load(open(sys.argv[1]))
+    t = json.load(open(sys.argv[1], encoding="utf-8"))
     print(json.dumps({"repeats": find_repeats(t["words"]),
                       "false_starts": find_false_starts(t["words"])}, ensure_ascii=False, indent=2))

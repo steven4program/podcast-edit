@@ -32,6 +32,21 @@ def speaker_from_filename(path):
     return os.path.splitext(os.path.basename(path))[0].split("--")[-1]
 
 
+def _posix(path):
+    # Store source paths with forward slashes so a transcript.json written on Windows
+    # (backslash paths) still resolves when rendered on macOS/Linux. Both OSes accept '/'.
+    return path.replace("\\", "/")
+
+
+def _clamp_word_end(text, start, end):
+    # Scribe occasionally emits absurd word durations (a single 股 spanning 98s, an
+    # OK-backchannel run spanning 12s). Such a word "covers" a minute of timeline and
+    # render's mid-word guard then blocks every cut inside it. Cap the duration at a
+    # generous per-character budget; real zh words run ~0.15-0.3s per character.
+    budget = 0.5 + 0.45 * max(1, len(re.findall(r"\w", text)))
+    return min(end, start + budget)
+
+
 def normalize_scribe(raw, speaker=None):
     words, events, next_id = [], [], 0
     for e in raw.get("words", []):
@@ -43,7 +58,8 @@ def normalize_scribe(raw, speaker=None):
             if not text:
                 continue
             words.append({"id": next_id, "text": text, "start": e["start"],
-                          "end": e["end"], "speaker": e.get("speaker_id")})
+                          "end": _clamp_word_end(text, e["start"], e["end"]),
+                          "speaker": e.get("speaker_id")})
             next_id += 1
         elif e.get("type") == "audio_event":
             events.append({"type": _classify_event(e["text"]), "start": e["start"],
@@ -192,11 +208,11 @@ def transcribe(audio_path, out_path, language="zho"):
     finally:
         os.remove(wav)
     raw["audio"] = audio_path
-    with open(_raw_path(out_path, "_raw.json"), "w") as f:
+    with open(_raw_path(out_path, "_raw.json"), "w", encoding="utf-8") as f:
         json.dump(raw, f, ensure_ascii=False, indent=2)
     transcript = normalize_scribe(raw)
-    transcript["audio"] = audio_path
-    with open(out_path, "w") as f:
+    transcript["audio"] = _posix(audio_path)
+    with open(out_path, "w", encoding="utf-8") as f:
         json.dump(transcript, f, ensure_ascii=False, indent=2)
     return transcript
 
@@ -217,13 +233,13 @@ def transcribe_multitrack(track_paths, out_path, language="zho"):
         finally:
             os.remove(wav)
         raw["audio"] = path
-        with open(_raw_path(out_path, f"_{speaker}_raw.json"), "w") as f:
+        with open(_raw_path(out_path, f"_{speaker}_raw.json"), "w", encoding="utf-8") as f:
             json.dump(raw, f, ensure_ascii=False, indent=2)
         norm = normalize_scribe(raw, speaker=speaker)
         normalized.append(_remap_transcript(norm, segments))
     merged = merge_tracks(normalized)
-    merged["tracks"] = list(track_paths)
-    with open(out_path, "w") as f:
+    merged["tracks"] = [_posix(p) for p in track_paths]
+    with open(out_path, "w", encoding="utf-8") as f:
         json.dump(merged, f, ensure_ascii=False, indent=2)
     return merged
 
