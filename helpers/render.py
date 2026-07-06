@@ -155,31 +155,84 @@ def _snap_silences(sources, scratch):
         os.remove(mix)
 
 
-def _filtergraph(n_tracks, segments, track_mutes=None):
-    """Cut every track at `segments` (3ms fades per piece), concat per track, then mix.
-    track_mutes[ti] = [(s,e),...] silences that track in those original-timeline spans
-    (the multitrack cough superpower: kill a cough on the host's track without removing time
-    or touching other speakers)."""
+# Per-track speech leveling. Everything here is STATIC (a constant gain and a fixed
+# input->output level curve), which is the load-bearing property: any time-varying,
+# silence-gated leveler manufactures a fade-out at every sentence end. dynaudnorm was
+# measured doing exactly that (a 4.6 dB natural phrase tail became a 28-36 dB fade):
+# its per-frame gain takes the MINIMUM over a ~3s window, the silent frames after a
+# phrase are gated to unity gain, and the min-filter drags that unity back through the
+# last ~1.5s of speech. Lowering the threshold doesn't help (silence is below any
+# usable threshold); removing it boosts the noise floor ~20 dB. So:
+# 1. speech_gain() — one constant volume per track aligns each speaker's typical
+#    speech level (evens speaker gaps; replaces dynaudnorm's cross-track job).
+# 2. compand, downward compression ONLY: 4:1 above the -32 dB knee squeezes sudden
+#    loud bursts; below the knee the curve is exactly 1:1, so a decaying tail falls at
+#    its natural rate — compression-only can never steepen a fade (a curve that BOOSTS
+#    quiet speech must slope >1 below the boost region, and tails passing through that
+#    zone plunge; a -35->-18 boost curve measurably doubled tail decay).
+# 3. global loudnorm (in render) anchors the mix at -16 LUFS.
+_LEVEL = "compand=attacks=0.05:decays=0.3:soft-knee=6:points=-80/-80|-32/-32|0/-24"
+_TARGET_SPEECH_DB = -23.0
+
+
+def speech_gain(path, target_db=_TARGET_SPEECH_DB, clamp_db=12.0):
+    """Static per-track gain (dB) aligning this speaker's typical speech level to
+    target: 70th percentile of 50ms RMS frames above -45 dBFS (his own speech; the
+    track is silent when he isn't talking). Clamped so a near-silent or clipping
+    track can't produce a wild gain."""
+    import numpy as np, soundfile as sf
+    x, _sr = sf.read(path)
+    x = x if x.ndim == 1 else x.mean(1)
+    fr = int(0.05 * _sr)
+    n = len(x) // fr
+    if not n:
+        return 0.0
+    rms = np.sqrt((x[:n * fr].reshape(n, fr) ** 2).mean(1))
+    voiced = rms[rms > 10 ** (-45 / 20)]
+    if not len(voiced):
+        return 0.0
+    level = 20 * np.log10(float(np.percentile(voiced, 70)))
+    return round(max(-clamp_db, min(clamp_db, target_db - level)), 1)
+
+
+def _filtergraph(n_tracks, segments, track_mutes=None, track_gains=None, loudnorm=True):
+    """Cut every track at `segments` (3ms fades per piece), concat + level per track,
+    then mix. track_mutes[ti] = [(s,e),...] silences that track in those original-timeline
+    spans (the multitrack cough superpower: kill a cough on the host's track without
+    removing time or touching other speakers). track_gains[ti] = static dB from
+    speech_gain(), applied ahead of the compand stage."""
     track_mutes = track_mutes or {}
+    track_gains = track_gains or {}
     parts, track_labels = [], []
+    n_seg = len(segments)
     for ti in range(n_tracks):
-        src = f"[{ti}:a]"
+        # Each segment's atrim needs its own source pad. A raw input pad ([ti:a]) can be
+        # referenced by many filters (ffmpeg auto-splits it), but a FILTER-OUTPUT label can
+        # only feed one consumer — so when we mute a track, its volume=0 output must be
+        # asplit into one copy per segment. Reusing a single [m{ti}] label across every atrim
+        # silently drops most of that track in a multi-input graph (host vanishes from the mix).
         if track_mutes.get(ti):
             en = "+".join(f"between(t,{s},{e})" for s, e in track_mutes[ti])
-            parts.append(f"{src}volume=0:enable='{en}'[m{ti}]")
-            src = f"[m{ti}]"
+            outs = "".join(f"[m{ti}_{si}]" for si in range(n_seg))
+            parts.append(f"[{ti}:a]volume=0:enable='{en}',asplit={n_seg}{outs}")
+            seg_srcs = [f"[m{ti}_{si}]" for si in range(n_seg)]
+        else:
+            seg_srcs = [f"[{ti}:a]"] * n_seg
         seg_labels = []
         for si, (s, e) in enumerate(segments):
             lbl = f"a{ti}_{si}"
-            parts.append(f"{src}atrim={s}:{e},asetpts=PTS-STARTPTS,"
+            parts.append(f"{seg_srcs[si]}atrim={s}:{e},asetpts=PTS-STARTPTS,"
                          f"afade=t=in:st=0:d=0.003,"
                          f"afade=t=out:st={max(e - s - 0.003, 0)}:d=0.003[{lbl}]")
             seg_labels.append(f"[{lbl}]")
-        parts.append("".join(seg_labels) + f"concat=n={len(segments)}:v=0:a=1[t{ti}]")
+        lvl = f"volume={track_gains.get(ti, 0.0)}dB,{_LEVEL}"
+        parts.append("".join(seg_labels) + f"concat=n={len(segments)}:v=0:a=1,{lvl}[t{ti}]")
         track_labels.append(f"[t{ti}]")
     loud = "loudnorm=I=-16:TP=-1.5:LRA=11[out]"
     if n_tracks == 1:
-        parts.append(f"{track_labels[0]}{loud}")
+        # loudnorm=False is the stem path: a lone track keeps its leveling but skips
+        # loudnorm, so re-mixing the stems preserves the speaker balance.
+        parts.append(f"{track_labels[0]}{loud}" if loudnorm else f"{track_labels[0]}anull[out]")
     else:
         parts.append("".join(track_labels) + f"amix=inputs={n_tracks}:normalize=0,{loud}")
     return ";".join(parts)
@@ -187,6 +240,31 @@ def _filtergraph(n_tracks, segments, track_mutes=None):
 
 def _speaker(path):
     return os.path.splitext(os.path.basename(path))[0].split("--")[-1]
+
+
+def _track_mutes(sources, mutes):
+    out = {}
+    for m in mutes or []:
+        for ti, src in enumerate(sources):
+            if _speaker(src) == m["speaker"]:
+                out.setdefault(ti, []).append((m["start"], m["end"]))
+    return out
+
+
+def _run_ffmpeg(sources, fc, out_path):
+    # Many cuts -> a long filtergraph. Passed inline it can exceed the OS command-line
+    # limit (Windows CreateProcess caps at ~32k chars), so hand it to ffmpeg via a script
+    # file (-filter_complex_script) instead of an argv string. Portable, no length ceiling.
+    import tempfile
+    fd, fc_path = tempfile.mkstemp(suffix=".ffscript")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(fc)
+    inputs = [x for src in sources for x in ("-i", src)]
+    try:
+        subprocess.run(["ffmpeg", "-y", *inputs, "-filter_complex_script", fc_path,
+                        "-map", "[out]", out_path], check=True, capture_output=True)
+    finally:
+        os.remove(fc_path)
 
 
 def render(transcript, cuts, audio_path, out_path, snap_window=0.3, mutes=None):
@@ -218,21 +296,40 @@ def render(transcript, cuts, audio_path, out_path, snap_window=0.3, mutes=None):
     if flagged:
         raise ValueError(f"mid-word boundaries after snap: {flagged}")
 
-    track_mutes = {}
-    for m in mutes or []:
-        for ti, src in enumerate(sources):
-            if _speaker(src) == m["speaker"]:
-                track_mutes.setdefault(ti, []).append((m["start"], m["end"]))
-    inputs = [x for src in sources for x in ("-i", src)]
-    fc = _filtergraph(len(sources), segments, track_mutes)
-    subprocess.run(["ffmpeg", "-y", *inputs, "-filter_complex", fc, "-map", "[out]", out_path],
-                   check=True, capture_output=True)
+    track_mutes = _track_mutes(sources, mutes)
+    track_gains = {ti: speech_gain(src) for ti, src in enumerate(sources)}
+    fc = _filtergraph(len(sources), segments, track_mutes, track_gains)
+    _run_ffmpeg(sources, fc, out_path)
 
     kept = {"words": remap_words(words, segments), "segments": segments}
     kept_path = os.path.splitext(out_path)[0] + "_kept_transcript.json"  # robust to non-.mp3 out
-    with open(kept_path, "w") as f:
+    with open(kept_path, "w", encoding="utf-8") as f:
         json.dump(kept, f, ensure_ascii=False, indent=2)
     return {"segments": segments, "snapped": snapped_count, "flagged": flagged}
+
+
+def render_stems(transcript, cuts, audio_path, out_dir, snap_window=0.3, mutes=None):
+    """Stem export of the approved cut: out_dir/final.<ext> (the integrated mix) plus one
+    final_<speaker>.<ext> per source track, in the SOURCE tracks' format (wav in → wav out,
+    mp3 in → mp3 out). Every file is cut at the SAME boundaries and the host's mutes apply
+    to his stem too, so the stems stay time-aligned with the mix. Stems keep the per-track
+    speech leveling but skip loudnorm — normalizing each stem alone would shift the
+    speaker balance when they are re-mixed downstream."""
+    sources = transcript.get("tracks") or [audio_path]
+    ext = os.path.splitext(sources[0])[1].lower() or ".wav"
+    os.makedirs(out_dir, exist_ok=True)
+    mix_path = os.path.join(out_dir, f"final{ext}")
+    res = render(transcript, cuts, audio_path, mix_path, snap_window, mutes)
+    track_mutes = _track_mutes(sources, mutes)
+    outputs = {"mix": mix_path}
+    for ti, src in enumerate(sources):
+        stem = os.path.join(out_dir, f"final_{_speaker(src)}{ext}")
+        fc = _filtergraph(1, res["segments"],
+                          {0: track_mutes[ti]} if ti in track_mutes else None,
+                          {0: speech_gain(src)}, loudnorm=False)
+        _run_ffmpeg([src], fc, stem)
+        outputs[_speaker(src)] = stem
+    return {**res, "outputs": outputs}
 
 
 if __name__ == "__main__":
@@ -240,8 +337,14 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("transcript"); p.add_argument("cuts"); p.add_argument("out")
     p.add_argument("--audio", help="single-file source (ignored if transcript has tracks)")
+    p.add_argument("--stems", action="store_true",
+                   help="OUT is a directory: write final.<ext> (mix) + one stem per speaker, "
+                        "in the source tracks' format (wav in -> wav out, mp3 in -> mp3 out)")
     a = p.parse_args()
-    t = json.load(open(a.transcript))
-    spec = json.load(open(a.cuts))  # {"cuts": [...], "mutes": [...]} (mutes optional)
-    res = render(t, spec["cuts"], a.audio, a.out, mutes=spec.get("mutes"))
+    t = json.load(open(a.transcript, encoding="utf-8"))
+    spec = json.load(open(a.cuts, encoding="utf-8"))  # {"cuts": [...], "mutes": [...]} (mutes optional)
+    if a.stems:
+        res = render_stems(t, spec["cuts"], a.audio, a.out, mutes=spec.get("mutes"))
+    else:
+        res = render(t, spec["cuts"], a.audio, a.out, mutes=spec.get("mutes"))
     print(json.dumps(res, ensure_ascii=False))

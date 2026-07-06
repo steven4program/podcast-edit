@@ -121,7 +121,7 @@ def test_render_short_cut_not_collapsed_by_snap(tmp_path):
         {"id": 1, "text": "這", "start": 1.30, "end": 1.38, "speaker": "a"},  # stutter frag
         {"id": 2, "text": "種", "start": 1.38, "end": 1.50, "speaker": "a"}]}
     r.render(t, [{"start_word": 1, "end_word": 1, "reason": "stutter"}], wav, out)
-    kept = {w["id"] for w in json.load(open(out.replace(".mp3", "_kept_transcript.json")))["words"]}
+    kept = {w["id"] for w in json.load(open(out.replace(".mp3", "_kept_transcript.json"), encoding="utf-8"))["words"]}
     assert 1 not in kept and 0 in kept and 2 in kept
 
 
@@ -133,7 +133,7 @@ def test_render_output_duration_matches_kept(tmp_path):
     cuts = [{"type": "micro", "start_word": 0, "end_word": 0, "reason": "repeat 我覺得"}]
     result = r.render(t, cuts, wav, out)
     assert os.path.exists(out)
-    kept = json.load(open(out.replace(".mp3", "_kept_transcript.json")))
+    kept = json.load(open(out.replace(".mp3", "_kept_transcript.json"), encoding="utf-8"))
     assert kept["words"][0]["id"] == 1
     expected = sum(e - s for s, e in result["segments"])
     assert abs(r.probe_duration(out) - expected) < 0.3  # no drift / no extra audio
@@ -148,6 +148,87 @@ def test_render_kept_path_robust_to_non_mp3_out(tmp_path):
     r.render(t, [{"type": "micro", "start_word": 0, "end_word": 0, "reason": "x"}], wav, out)
     assert r.probe_duration(out) > 0  # audio intact, not overwritten by JSON
     assert os.path.exists(str(tmp_path / "out_kept_transcript.json"))
+
+
+# ── speech leveling (per-track, before mix) ──────────────────────────────────
+def test_filtergraph_levels_each_track_before_mix():
+    fc = r._filtergraph(2, [(0.0, 1.0), (2.0, 3.0)], track_gains={0: -3.0, 1: 2.5})
+    assert "dynaudnorm" not in fc  # its gated min-filter fades every phrase tail
+    for ti, g in ((0, -3.0), (1, 2.5)):  # static gain + compand between concat and [tN]
+        assert f"concat=n=2:v=0:a=1,volume={g}dB,{r._LEVEL}[t{ti}]" in fc
+    assert "amix" in fc and "loudnorm" in fc.split("amix")[1]  # global anchor stays last
+
+
+def test_filtergraph_levels_single_track():
+    fc = r._filtergraph(1, [(0.0, 1.0)])
+    assert "volume=0.0dB" in fc and fc.count("compand") == 1 and "loudnorm" in fc
+
+
+def test_speech_gain_aligns_track_to_target(tmp_path):
+    # A quiet speaker (tone RMS ~ -35 dBFS) gets a positive gain toward -23; the gain
+    # is computed from SPEECH frames only, so leading silence must not dilute it.
+    import numpy as np, soundfile as sf
+    sr = 16000
+    tone = np.sin(2 * np.pi * 220 * np.arange(4 * sr) / sr).astype(np.float32)
+    quiet = str(tmp_path / "q.wav")
+    sf.write(quiet, np.concatenate([np.zeros(4 * sr, np.float32), 0.025 * tone]), sr)
+    g = r.speech_gain(quiet)
+    assert 8.0 <= g <= 12.0  # ~-35 dB speech -> ~+12 toward -23 (clamped at 12)
+    silent = str(tmp_path / "s.wav")
+    sf.write(silent, np.zeros(2 * sr, np.float32), sr)
+    assert r.speech_gain(silent) == 0.0  # nothing voiced -> leave the track alone
+
+
+def test_level_compand_is_compression_only():
+    # The compand stage must be downward compression only: a 1:1 floor below the knee.
+    # Any boost region needs a >1 slope below it to return to unity, and a sentence
+    # tail decaying through that zone falls FASTER than the source — an audible
+    # fade-out ("講到最後越來越小聲"). Regression: never reintroduce a boost curve.
+    assert "compand" in r._LEVEL
+    import re
+    pts = re.search(r"points=([^:,]+)", r._LEVEL).group(1)
+    pairs = [tuple(map(float, p.split("/"))) for p in pts.split("|")]
+    for (i1, o1), (i2, o2) in zip(pairs, pairs[1:]):
+        assert (o2 - o1) / (i2 - i1) <= 1.0  # no expansion segment anywhere
+
+
+def test_render_does_not_steepen_fading_tail(tmp_path):
+    # Same speaker trails off: 4s at 0.4 then 4s at 0.1 (-12 dB). Leveling must not
+    # make the quiet tail fall further than the source did (the fade-out regression);
+    # squeezing the loud head may narrow the gap, never widen it.
+    import numpy as np, soundfile as sf
+    sr = 16000
+    n = int(4 * sr)
+    tone = np.sin(2 * np.pi * 220 * np.arange(n) / sr).astype(np.float32)
+    wav, out = str(tmp_path / "in.wav"), str(tmp_path / "out.mp3")
+    sf.write(wav, np.concatenate([0.4 * tone, 0.1 * tone]), sr)
+    t = {"audio": wav, "duration": 8.0,
+         "words": [{"id": 0, "text": "好", "start": 0.0, "end": 0.5, "speaker": "a"}]}
+    r.render(t, [], wav, out)
+    x, sr2 = sf.read(out)
+    x = x if x.ndim == 1 else x.mean(axis=1)
+    rms = lambda a, b: float(np.sqrt(np.mean(x[int(a * sr2):int(b * sr2)] ** 2)))
+    ratio = rms(1.0, 3.0) / rms(5.0, 7.0)  # head vs tail, away from the transition
+    assert ratio <= 4.5  # input ratio 4x; must not widen (small tolerance for codec)
+
+
+def test_render_levels_sudden_volume_change(tmp_path):
+    # Same speaker: 6s quiet tone (0.03) then 6s loud tone (0.5) — a ~17x RMS jump.
+    # Leveling must pull the halves close; without it loudnorm alone leaves the gap.
+    import numpy as np, soundfile as sf
+    sr = 16000
+    n = int(6 * sr)
+    tone = np.sin(2 * np.pi * 220 * np.arange(n) / sr).astype(np.float32)
+    wav, out = str(tmp_path / "in.wav"), str(tmp_path / "out.mp3")
+    sf.write(wav, np.concatenate([0.03 * tone, 0.5 * tone]), sr)
+    t = {"audio": wav, "duration": 12.0,
+         "words": [{"id": 0, "text": "好", "start": 0.0, "end": 0.5, "speaker": "a"}]}
+    r.render(t, [], wav, out)
+    x, sr2 = sf.read(out)
+    x = x if x.ndim == 1 else x.mean(axis=1)
+    rms = lambda a, b: float(np.sqrt(np.mean(x[int(a * sr2):int(b * sr2)] ** 2)))
+    ratio = rms(7.0, 11.0) / rms(1.0, 5.0)  # mid-half windows, away from the transition
+    assert ratio < 3.0  # input ratio ~16.7; leveled output must be far closer to even
 
 
 # ── Task 2.2: render (multitrack — per-track cut then mix) ────────────────────
@@ -167,6 +248,64 @@ def test_render_mute_silences_span_without_removing_time(tmp_path):
     assert abs(r.probe_duration(out) - 3.0) < 0.2  # time NOT removed
     assert rms(1.3, 1.7) < 0.02                     # muted span ~silent
     assert rms(0.1, 0.8) > 0.05                     # rest keeps the tone
+
+
+def test_render_multitrack_mute_does_not_drop_track_from_mix(tmp_path):
+    # Regression: a muted track's volume=0 output is a filter-output label; feeding it to
+    # every segment's atrim by reusing one label drops most of that track in a multi-input
+    # graph (the host vanishes from the mix). It must be asplit into one copy per segment.
+    import numpy as np, soundfile as sf
+    sr = 16000
+    tone = (0.3 * np.sin(2 * np.pi * 220 * np.arange(int(3 * sr)) / sr)).astype(np.float32)
+    a, b = str(tmp_path / "x--hosta.wav"), str(tmp_path / "x--guestb.wav")
+    sf.write(a, tone, sr)                         # host: continuous tone
+    sf.write(b, np.zeros(int(3 * sr), np.float32), sr)  # 2nd input -> multi-input graph
+    out = str(tmp_path / "out.mp3")
+    t = {"duration": 3.0, "tracks": [a, b],
+         "words": [{"id": 0, "text": "甲", "start": 0.0, "end": 0.4, "speaker": "hosta"},
+                   {"id": 1, "text": "乙", "start": 0.6, "end": 1.0, "speaker": "hosta"},
+                   {"id": 2, "text": "丙", "start": 2.0, "end": 2.4, "speaker": "hosta"},
+                   {"id": 3, "text": "丁", "start": 2.6, "end": 3.0, "speaker": "hosta"}]}
+    cuts = [{"type": "micro", "start_word": 1, "end_word": 1, "reason": "x"}]  # split -> 2 segments
+    r.render(t, cuts, None, out,
+             mutes=[{"speaker": "hosta", "start": 0.1, "end": 0.3}])  # tiny mute early
+    x, sr2 = sf.read(out); x = x if x.ndim == 1 else x.mean(axis=1)
+    tail = float(np.sqrt(np.mean(x[int(2.0 * sr2):] ** 2)))  # a LATER segment (post-mute)
+    assert tail > 0.05  # host's tone survives in the mix after the muted span
+
+
+def test_filtergraph_stem_mode_keeps_leveling_but_skips_loudnorm():
+    # A stem is one track rendered alone: loudnorm-ing it in isolation would shift the
+    # speaker balance when the stems are re-mixed, so loudnorm=False must drop only that.
+    fc = r._filtergraph(1, [(0.0, 1.0)], loudnorm=False)
+    assert "loudnorm" not in fc and "anull[out]" in fc
+    assert "compand" in fc and "volume=0.0dB" in fc
+
+
+def test_render_stems_exports_mix_and_per_speaker_stems_as_wav_from_wav(tmp_path):
+    a, b = str(tmp_path / "x--host.wav"), str(tmp_path / "x--guest.wav")
+    make_two_tracks(a, b)
+    t = sample_transcript(); t.pop("audio", None); t["tracks"] = [a, b]
+    cuts = [{"type": "micro", "start_word": 0, "end_word": 0, "reason": "repeat"}]
+    res = r.render_stems(t, cuts, None, str(tmp_path / "out"),
+                         mutes=[{"speaker": "host", "start": 1.6, "end": 1.9}])
+    assert set(res["outputs"]) == {"mix", "host", "guest"}  # 整合 + one per speaker
+    expected = sum(e - s for s, e in res["segments"])
+    for path in res["outputs"].values():
+        assert path.endswith(".wav") and os.path.exists(path)  # wav sources -> wav out
+        assert abs(r.probe_duration(path) - expected) < 0.3  # all cut at the same boundaries
+
+
+def test_render_stems_output_format_follows_mp3_source(tmp_path):
+    import subprocess
+    wav, mp3 = str(tmp_path / "in.wav"), str(tmp_path / "x--host.mp3")
+    make_test_wav(wav)
+    subprocess.run(["ffmpeg", "-y", "-i", wav, mp3], check=True, capture_output=True)
+    t = sample_transcript(); t["audio"] = mp3
+    res = r.render_stems(t, [], mp3, str(tmp_path / "out"))
+    assert res["outputs"]["mix"].endswith("final.mp3")      # mp3 source -> mp3 out
+    assert res["outputs"]["host"].endswith("final_host.mp3")
+    assert all(os.path.exists(p) for p in res["outputs"].values())
 
 
 def test_render_multitrack_cuts_each_track_and_mixes(tmp_path):
