@@ -10,13 +10,15 @@ co-articulated with his own words -> flag (cut/mute can't remove those without l
 The model is a pluggable provider (Gemini / OpenAI / …) — see ai_providers.py. sweep_track
 and classify take a provider object (dependency injection) so the detection logic here is
 backend-agnostic and unit-testable with a fake provider (no network in tests).
+NOTE: both audio-LLM backends are currently commented out in ai_providers.py (user
+request 2026-07-11) — the CLI therefore defaults to the keyless `scribe` path below.
 
 Laughter is NEVER a candidate: any 'laughter' label means keep.
 """
 import json, os, re, subprocess, sys, tempfile, time
 
-from .render import probe_duration, _protected
-from .ai_providers import get_provider
+from .render import probe_duration, _protected, frame_rms
+from .ai_providers import get_provider, _PROVIDERS
 
 _KEYWORDS = [("throat", "throat_clear"), ("nose", "throat_clear"), ("sniff", "throat_clear"),
              ("cough", "cough"), ("laugh", "laughter"), ("breath", "breath"),
@@ -118,19 +120,28 @@ def verify_on_track(events, host_track, k=5.0, pad=0.06):
     THEIR track must not count as the host clearing his throat. Keep an event only if its
     peak RMS on the host track is >= k x the track's noise floor."""
     import numpy as np, soundfile as sf
-    x, sr = sf.read(host_track)
-    x = x if x.ndim == 1 else x.mean(1)
+    rms, sr = frame_rms(host_track, 0.02)   # streamed — never the whole track in RAM
+    if not len(rms):
+        return list(events)                 # unreadable/empty track: fail open
     fr = int(0.02 * sr)
-    n = len(x) // fr
-    floor = float(np.percentile(np.sqrt((x[:n * fr].reshape(n, fr) ** 2).mean(1)), 10))
-    thresh = k * floor
+    thresh = k * float(np.percentile(rms, 10))
     out = []
-    for ev in events:
-        s = x[int((ev["start"] - pad) * sr):int((ev["end"] + pad) * sr)]
-        m = len(s) // fr
-        peak = float(np.sqrt((s[:m * fr].reshape(m, fr) ** 2).mean(1)).max()) if m else 0.0
-        if peak >= thresh:
-            out.append(ev)
+    with sf.SoundFile(host_track) as f:
+        for ev in events:
+            # clamp at 0: a negative start index would slice from the track's END
+            # (Python negative indexing) and silently drop a real event at t≈0
+            a = max(0, int((ev["start"] - pad) * sr))
+            b = min(len(f), int((ev["end"] + pad) * sr))
+            peak = 0.0
+            if b > a:
+                f.seek(a)
+                s = f.read(b - a, dtype="float64")
+                s = s if s.ndim == 1 else s.mean(1)
+                m = len(s) // fr
+                if m:
+                    peak = float(np.sqrt((s[:m * fr].reshape(m, fr) ** 2).mean(1)).max())
+            if peak >= thresh:
+                out.append(ev)
     return out
 
 
@@ -207,9 +218,12 @@ if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser(description="Sweep the host's track for throat/nose-clears.")
     p.add_argument("host_track"); p.add_argument("transcript"); p.add_argument("host")
-    p.add_argument("--provider", default=None,
-                   help="gemini (default: $AI_PROVIDER or gemini; openai disabled) | "
-                        "scribe = keyless, reuse transcript.json's Scribe event tags (low recall)")
+    # no audio-LLM backend enabled -> scribe is the only working path, make it the default
+    # (re-enabling a provider in ai_providers.py flips the default back automatically)
+    p.add_argument("--provider", default=("scribe" if not _PROVIDERS else None),
+                   help="scribe = keyless, reuse transcript.json's Scribe event tags "
+                        "(low recall; the CURRENT default — Gemini/OpenAI are commented "
+                        "out in ai_providers.py) | or an enabled audio-LLM provider name")
     p.add_argument("--model", default=None, help="override the provider's default model")
     p.add_argument("--throttle", type=float, default=7.0, help="sleep between windows; 0 on paid tier")
     p.add_argument("--window", type=float, default=12.0)

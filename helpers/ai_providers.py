@@ -12,23 +12,32 @@ import os
 
 # import base64  # only needed by the disabled OpenAIProvider below
 
-
-class GeminiProvider:
-    """Google Gemini (native multimodal audio). Needs GEMINI_API_KEY + `google-genai`."""
-    name = "gemini"
-    default_model = "gemini-2.5-flash"
-
-    def __init__(self, model=None):
-        from google import genai
-        self.client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-        self.model = model or self.default_model
-
-    def generate(self, prompt, clip_path, json_mode=False):
-        uploaded = self.client.files.upload(file=clip_path)
-        kwargs = {"config": {"response_mime_type": "application/json"}} if json_mode else {}
-        resp = self.client.models.generate_content(
-            model=self.model, contents=[prompt, uploaded], **kwargs)
-        return resp.text
+# Gemini backend DISABLED by user request (2026-07-11) — cough/throat-clear detection is
+# Scribe-only for now (`--provider scribe`, keyless; much lower recall — see ai_listen).
+# Uncomment the class and its registry entry below to re-enable (needs GEMINI_API_KEY +
+# `pip install google-genai`).
+# class GeminiProvider:
+#     """Google Gemini (native multimodal audio). Needs GEMINI_API_KEY + `google-genai`."""
+#     name = "gemini"
+#     default_model = "gemini-2.5-flash"
+#
+#     def __init__(self, model=None):
+#         from google import genai
+#         self.client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+#         self.model = model or self.default_model
+#
+#     def generate(self, prompt, clip_path, json_mode=False):
+#         uploaded = self.client.files.upload(file=clip_path)
+#         kwargs = {"config": {"response_mime_type": "application/json"}} if json_mode else {}
+#         try:
+#             resp = self.client.models.generate_content(
+#                 model=self.model, contents=[prompt, uploaded], **kwargs)
+#         finally:
+#             try:  # a sweep uploads hundreds of clips; don't leave them counting
+#                 self.client.files.delete(name=uploaded.name)  # against the files quota
+#             except Exception:
+#                 pass  # best-effort — Gemini expires them after 48h anyway
+#         return resp.text
 
 
 # OpenAI backend DISABLED by user request (2026-07-03) — uncomment the class and its
@@ -61,7 +70,7 @@ class GeminiProvider:
 
 # Registry: name -> provider class. Add a backend by defining a class with the same
 # (model=None) __init__ and .generate(prompt, clip_path, json_mode) and listing it here.
-_PROVIDERS = {p.name: p for p in (GeminiProvider,)}  # OpenAIProvider disabled (see above)
+_PROVIDERS = {}  # GeminiProvider + OpenAIProvider both disabled (see above)
 
 
 def get_provider(name=None, model=None):
@@ -71,5 +80,8 @@ def get_provider(name=None, model=None):
     try:
         cls = _PROVIDERS[name]
     except KeyError:
-        raise ValueError(f"unknown AI provider {name!r}; choose from {sorted(_PROVIDERS)}")
+        raise ValueError(
+            f"unknown AI provider {name!r}; choose from {sorted(_PROVIDERS)} "
+            "(Gemini/OpenAI are commented out in helpers/ai_providers.py — "
+            "use `--provider scribe` for keyless detection, or re-enable a backend there)")
     return cls(model=model)

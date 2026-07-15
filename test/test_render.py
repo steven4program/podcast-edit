@@ -156,12 +156,40 @@ def test_filtergraph_levels_each_track_before_mix():
     assert "dynaudnorm" not in fc  # its gated min-filter fades every phrase tail
     for ti, g in ((0, -3.0), (1, 2.5)):  # static gain + compand between concat and [tN]
         assert f"concat=n=2:v=0:a=1,volume={g}dB,{r._LEVEL}[t{ti}]" in fc
-    assert "amix" in fc and "loudnorm" in fc.split("amix")[1]  # global anchor stays last
+    # mastering is a separate measured STATIC pass — single-pass loudnorm in the graph
+    # is dynamic (time-varying gain) and upsamples to 192kHz; it must never come back
+    assert "amix" in fc and "loudnorm" not in fc
 
 
 def test_filtergraph_levels_single_track():
     fc = r._filtergraph(1, [(0.0, 1.0)])
-    assert "volume=0.0dB" in fc and fc.count("compand") == 1 and "loudnorm" in fc
+    assert "volume=0.0dB" in fc and fc.count("compand") == 1 and "loudnorm" not in fc
+
+
+def test_master_gain_targets_integrated_loudness():
+    assert r._master_gain(-20.0) == 4.0            # -20 LUFS -> -16
+    assert r._master_gain(-10.0) == -6.0           # loud input turns the gain down
+    assert r._master_gain(float("-inf")) == 0.0    # silence: leave alone
+    # peaks are the limiter's job — a real episode has ~28dB crest (laughter bursts),
+    # so a TP-capped static gain left the whole episode 13dB under target
+    assert "alimiter" in r._MASTER and "level=false" in r._MASTER
+
+
+def test_render_masters_to_target_and_keeps_source_samplerate(tmp_path):
+    # End-to-end: output lands near -16 LUFS via ONE static gain, and the file keeps the
+    # source sample rate (in-graph loudnorm silently upsampled wav output to 192kHz).
+    import subprocess
+    wav, out = str(tmp_path / "in.wav"), str(tmp_path / "out.wav")
+    make_test_wav(wav)
+    t = sample_transcript(); t["audio"] = wav
+    res = r.render(t, [], wav, out)
+    i, tp = r.measure_loudness(out)
+    assert i > -18.5 and tp <= -1.0  # at/near target unless the TP cap bound first
+    rate = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=sample_rate",
+                           "-of", "default=nk=1:nw=1", out],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    assert rate == "16000"
+    assert "master_gain_db" in res
 
 
 def test_speech_gain_aligns_track_to_target(tmp_path):
@@ -213,8 +241,12 @@ def test_render_does_not_steepen_fading_tail(tmp_path):
 
 
 def test_render_levels_sudden_volume_change(tmp_path):
-    # Same speaker: 6s quiet tone (0.03) then 6s loud tone (0.5) — a ~17x RMS jump.
-    # Leveling must pull the halves close; without it loudnorm alone leaves the gap.
+    # Same speaker: 6s quiet tone (0.03) then 6s loud tone (0.5) — a ~17x (24dB) RMS jump.
+    # The STATIC chain (per-track gain + downward-only compand) must squeeze the loud
+    # burst hard. Its design optimum here is ~15.8dB (the quiet half sits below the -32
+    # knee, and downward-only means it is never boosted): the old <3x expectation was
+    # met only by single-pass loudnorm's DYNAMIC gain — the exact mechanism hard rule 7
+    # forbids (it manufactures phrase-tail fades). Static mastering keeps the ratio.
     import numpy as np, soundfile as sf
     sr = 16000
     n = int(6 * sr)
@@ -228,7 +260,7 @@ def test_render_levels_sudden_volume_change(tmp_path):
     x = x if x.ndim == 1 else x.mean(axis=1)
     rms = lambda a, b: float(np.sqrt(np.mean(x[int(a * sr2):int(b * sr2)] ** 2)))
     ratio = rms(7.0, 11.0) / rms(1.0, 5.0)  # mid-half windows, away from the transition
-    assert ratio < 3.0  # input ratio ~16.7; leveled output must be far closer to even
+    assert ratio < 7.0  # ~16.7x in -> ~6x out: the compand stage did its (static) work
 
 
 # ── Task 2.2: render (multitrack — per-track cut then mix) ────────────────────
@@ -268,16 +300,17 @@ def test_render_multitrack_mute_does_not_drop_track_from_mix(tmp_path):
                    {"id": 3, "text": "丁", "start": 2.6, "end": 3.0, "speaker": "hosta"}]}
     cuts = [{"type": "micro", "start_word": 1, "end_word": 1, "reason": "x"}]  # split -> 2 segments
     r.render(t, cuts, None, out,
-             mutes=[{"speaker": "hosta", "start": 0.1, "end": 0.3}])  # tiny mute early
+             mutes=[{"speaker": "hosta", "start": 1.2, "end": 1.6}])  # mute in a word gap
     x, sr2 = sf.read(out); x = x if x.ndim == 1 else x.mean(axis=1)
     tail = float(np.sqrt(np.mean(x[int(2.0 * sr2):] ** 2)))  # a LATER segment (post-mute)
     assert tail > 0.05  # host's tone survives in the mix after the muted span
 
 
 def test_filtergraph_stem_mode_keeps_leveling_but_skips_loudnorm():
-    # A stem is one track rendered alone: loudnorm-ing it in isolation would shift the
-    # speaker balance when the stems are re-mixed, so loudnorm=False must drop only that.
-    fc = r._filtergraph(1, [(0.0, 1.0)], loudnorm=False)
+    # A stem is one track rendered alone: mastering it in isolation would shift the
+    # speaker balance when the stems are re-mixed. The graph only levels; render()'s
+    # master=False path (used for stems) skips the measured gain.
+    fc = r._filtergraph(1, [(0.0, 1.0)])
     assert "loudnorm" not in fc and "anull[out]" in fc
     assert "compand" in fc and "volume=0.0dB" in fc
 
@@ -306,6 +339,61 @@ def test_render_stems_output_format_follows_mp3_source(tmp_path):
     assert res["outputs"]["mix"].endswith("final.mp3")      # mp3 source -> mp3 out
     assert res["outputs"]["host"].endswith("final_host.mp3")
     assert all(os.path.exists(p) for p in res["outputs"].values())
+
+
+def test_verify_mutes_blocks_speakers_own_words_only():
+    words = [{"id": 0, "text": "你好", "start": 0.0, "end": 0.4, "speaker": "host"},
+             {"id": 1, "text": "呃", "start": 1.0, "end": 1.2, "speaker": "host"},
+             {"id": 2, "text": "對", "start": 0.1, "end": 0.5, "speaker": "guest"}]
+    # covers the host's own content word -> blocked
+    assert r.verify_mutes([{"speaker": "host", "start": 0.1, "end": 0.3}], words)
+    # sits in a gap in the host's speech -> fine (guest overlap is the whole point of mutes)
+    assert r.verify_mutes([{"speaker": "host", "start": 0.5, "end": 0.9}], words) == []
+    # covers only the host's filler -> fine (fillers are removable, mirroring _protected)
+    assert r.verify_mutes([{"speaker": "host", "start": 0.95, "end": 1.25}], words) == []
+
+
+def test_render_rejects_mute_over_speakers_own_word(tmp_path):
+    import pytest
+    wav, out = str(tmp_path / "x--host.wav"), str(tmp_path / "out.mp3")
+    make_test_wav(wav)
+    t = {"audio": wav, "duration": 4.0, "words": [
+        {"id": 0, "text": "你好", "start": 0.2, "end": 0.8, "speaker": "host"}]}
+    with pytest.raises(ValueError, match="mutes cover"):
+        r.render(t, [], wav, out, mutes=[{"speaker": "host", "start": 0.3, "end": 0.6}])
+
+
+def test_mute_pieces_partitions_and_folds_overlaps():
+    assert r._mute_pieces([(1.0, 2.0)], 3.0) == [(0.0, 1.0, False), (1.0, 2.0, True),
+                                                 (2.0, 3.0, False)]
+    # overlapping spans fold; clamped to [0, duration]; mute reaching the end: no tail
+    assert r._mute_pieces([(-1.0, 0.5), (0.4, 3.0)], 3.0) == [(0.0, 0.5, True),
+                                                              (0.5, 3.0, True)]
+
+
+def test_filtergraph_mute_fades_instead_of_hard_step():
+    fc = r._filtergraph(2, [(0.0, 3.0)], track_mutes={0: [(1.0, 2.0)]})
+    assert "enable=" not in fc                       # the old hard gain step is gone
+    assert "atrim=1.0:2.0,asetpts=PTS-STARTPTS,volume=0" in fc   # muted piece
+    assert "atrim=0.0:1.0,asetpts=PTS-STARTPTS,afade=t=in" in fc  # faded speech piece
+    assert "concat=n=3:v=0:a=1,asplit=1[m0_0]" in fc  # rebuilt to full length, then split
+
+
+def test_resolve_cut_times_reports_unknown_word_id():
+    import pytest
+    with pytest.raises(ValueError, match="unknown word id 99"):
+        r.resolve_cut_times([{"start_word": 99, "end_word": 99}], sample_transcript()["words"])
+
+
+def test_render_keeps_tail_after_last_word(tmp_path):
+    # transcript duration ends at the last word (3.7s) but the audio is 4.0s: the tail
+    # (room tone / decay past the last word) must survive, not be truncated.
+    wav, out = str(tmp_path / "in.wav"), str(tmp_path / "out.mp3")
+    make_test_wav(wav)  # 4.0s file
+    t = sample_transcript(); t["audio"] = wav; t["duration"] = 3.7  # last word's end
+    res = r.render(t, [], wav, out)
+    assert abs(r.probe_duration(out) - 4.0) < 0.2
+    assert res["segments"][-1][1] == r.probe_duration(wav)
 
 
 def test_render_multitrack_cuts_each_track_and_mixes(tmp_path):

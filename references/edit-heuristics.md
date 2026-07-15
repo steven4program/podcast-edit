@@ -51,15 +51,18 @@ user where the show starts instead of guessing.
 This is where a human editor spends most of their time; removing it is the whole point of the
 skill. Hunt aggressively — the cough-prone host clears his throat/nose almost continuously.
 
-- **Recall, not just Scribe events.** Scribe's event tagger has poor recall on soft nasal/throat
-  sounds (caught 3 of ~12 in a test clip) and RMS energy can't tell a throat-clear from a
-  voiced syllable — so don't rely on `transcript.json` events alone. The recall mechanism is a
-  **Gemini sweep over the host's own track**: slice it into ~12s windows and ask Gemini to
-  timestamp every throat/nose-clear. Scribe events are a starting set, not the candidate list.
+- **Detection is currently Scribe-only** (`helpers.ai_listen`, `--provider scribe` default):
+  it reuses the event tags in `transcript.json`. Know the recall ceiling and say so in the
+  proposal: Scribe's tagger has poor recall on soft nasal/throat sounds (caught 3 of ~12 in a
+  test clip; 13 vs the sweep's 38 on a test episode) — soft clears WILL be missed.
+- The higher-recall mechanism is an **audio-LLM sweep over the host's own track** (~12s
+  windows, timestamp every throat/nose-clear). Its backends (Gemini/OpenAI) are commented
+  out in `ai_providers.py` by user request (2026-07-11) — re-enable there if asked.
 - **Candidate = throat-clear/cough on the cough-prone host's track.** Flag other speakers' ones.
-- **LAUGHTER IS NEVER A CANDIDATE** (Scribe OR Gemini saying "laughter" → keep). This is the one
+- **LAUGHTER IS NEVER A CANDIDATE** (any detector saying "laughter" → keep). This is the one
   place precision beats recall: a wrongly-deleted laugh is unforgivable; a missed clear is not.
-- Confirm a candidate with `helpers.ai_listen.classify`; proceed only on cough/throat_clear.
+- With a provider enabled, confirm an ambiguous candidate with `helpers.ai_listen.classify`;
+  proceed only on cough/throat_clear.
 - **Removal is bounded by overlap with his OWN speech:**
   - In a *gap* in his own words → **mute** his track for that span (render `mutes=`): vanishes
     with no time removed, other speakers untouched (their overlap is fine — only his track mutes).
@@ -85,7 +88,10 @@ timeline, with `tracks: [paths]` and 100%-accurate speaker labels (from filename
   contribute no words for that span (not silence, not hallucinated text).
 
 ## Output format
-Write `edit/cuts.json`: `{"cuts":[{type, start_word, end_word, reason}, ...]}`.
+Write `edit/cuts.json`: `{"cuts":[{type, start_word, end_word, reason}, ...], "mutes":[...]}`.
 - `type`: `micro` (word/phrase), `macro` (segment), or `event` (cough; uses start/end).
 - Word cuts cite `start_word`/`end_word` ids from `packed.md`. Event cuts use `start`/`end`.
+- `mutes`: `[{speaker, start, end}, ...]` — silences that ONE track for the span, no time
+  removed (the cough path). A mute must sit in a gap in that speaker's own words; render
+  rejects one that covers their own content word (`verify_mutes`).
 - Every cut MUST cite ids from the transcript (or event start/end). Never invent times.

@@ -10,8 +10,8 @@
 ```
 python -m venv .venv && source .venv/bin/activate   # Windows：.venv\Scripts\activate
 pip install -e ".[ai,dev]"
-cp .env.example .env   # ELEVENLABS_API_KEY（轉錄）+ 咳嗽偵測 provider 金鑰
-                       # （AI_PROVIDER=gemini 加 GEMINI_API_KEY；OpenAI 後端目前停用）
+cp .env.example .env   # ELEVENLABS_API_KEY（轉錄；咳嗽偵測重用其事件標籤 ——
+                       # Gemini／OpenAI sweep 後端目前皆停用）
 ```
 需要 PATH 上有 `ffmpeg` / `ffprobe`。跨平台（macOS/Linux/Windows）—— helpers 強制 UTF-8
 輸入輸出、來源路徑以正斜線儲存，所以 transcript 在任一 OS 都能用。

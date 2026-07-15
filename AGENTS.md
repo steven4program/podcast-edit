@@ -18,12 +18,12 @@ mechanical work (transcribe, detect, cut, mix).
   lists and writes `cuts.json`.
 - **Recall-first detection, one mechanism per category** (the agent then *judges* each candidate):
   - fillers (呃嗯啊欸) — `fillers.py`, acoustic (Scribe's filler timestamps are unreliable).
-  - cough / throat-clear — `ai_listen.py`, an audio-LLM sweep over the host's *own* track.
-    The model is a pluggable provider (`ai_providers.py`; Gemini enabled, OpenAI currently
-    commented out by user request); sweep_track
-    and classify take an injected provider, so the detection logic is backend-agnostic.
-    Keyless fallback: `scribe_events` reuses the Scribe event tags in transcript.json
-    (`--provider scribe`; far lower recall than the sweep, same verify/split pipeline).
+  - cough / throat-clear — `ai_listen.py`. **Currently Scribe-only**: `scribe_events`
+    reuses the Scribe event tags in transcript.json (`--provider scribe`, the CLI default;
+    keyless). The higher-recall audio-LLM sweep machinery (`sweep_track`/`classify`) stays,
+    but both backends (Gemini, OpenAI) are commented out in `ai_providers.py` by user
+    request (2026-07-11) — re-enable there + restore the dep in pyproject `[ai]`. Detection
+    logic is backend-agnostic (injected provider); both paths share verify/split.
   - repeats / `-` stutters / `——` false-starts — `repeats.py`, deterministic adjacent-dup scan.
   - dead air — `deadair.py`, word-union gap scan (nobody talking ≥1.2s → shorten to 0.8s);
     a gap overlapping a laughter event is never proposed.
@@ -36,7 +36,9 @@ mechanical work (transcribe, detect, cut, mix).
   (a static per-track speech gain + downward-only compand compression — evens speaker gaps
   and sudden loud/quiet with NO time-varying gain: a silence-gated dynamic leveler
   (dynaudnorm) manufactures a fade-out at every phrase tail, and a boost curve steepens
-  tail decay the same way) and output is loudnormed (-16 LUFS). Per-track cut → mix,
+  tail decay the same way) and the mix is mastered to -16 LUFS with a measured STATIC
+  gain plus a transient peak limiter (never in-graph loudnorm: single-pass loudnorm is
+  itself a dynamic normalizer and silently upsamples wav output to 192kHz). Per-track cut → mix,
   so a single track can be muted (host cough) without touching the others.
 
 ## Layout
@@ -56,7 +58,7 @@ mechanical work (transcribe, detect, cut, mix).
 ```
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[ai,dev]"
-cp .env.example .env   # ELEVENLABS_API_KEY (Scribe); AI_PROVIDER=gemini + GEMINI_API_KEY (cough)
+cp .env.example .env   # ELEVENLABS_API_KEY (Scribe; cough detection is Scribe-only for now)
 ```
 Needs `ffmpeg` / `ffprobe` on PATH. **Run tests: `pytest test/ -q`.** Tests are offline — they
 use synthetic fixtures and exercise the pure timeline / detection logic. Keep them that way (no

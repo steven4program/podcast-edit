@@ -313,6 +313,13 @@ def serve(out_html, transcript_path, cuts_path, stems_dir, port=8765):
             return _Limited(f, end - start + 1)
 
         def do_POST(self):
+            # The server is loopback-only, but any web page open in the browser can
+            # still POST to localhost (CSRF) — accept only same-origin requests.
+            import re as _re
+            origin = self.headers.get("Origin")
+            if origin and not _re.match(r"https?://(127\.0\.0\.1|localhost)(:\d+)?$", origin):
+                self.send_error(403, "cross-origin export rejected")
+                return
             if not self.path.rstrip("/").endswith("/export"):
                 self.send_error(404, "unknown endpoint")
                 return

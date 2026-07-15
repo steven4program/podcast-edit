@@ -44,9 +44,17 @@ def test_get_provider_explicit_name_overrides_env(monkeypatch):
     assert isinstance(p, FakeProvider)
 
 
-def test_known_providers_registered():
-    assert "gemini" in ap._PROVIDERS
-    assert "openai" not in ap._PROVIDERS  # disabled by user request; see ai_providers.py
+def test_no_audio_llm_providers_enabled():
+    # Both backends disabled by user request (Gemini 2026-07-11, OpenAI 2026-07-03);
+    # detection is Scribe-only — see ai_providers.py to re-enable.
+    assert "gemini" not in ap._PROVIDERS
+    assert "openai" not in ap._PROVIDERS
+
+
+def test_get_provider_error_points_to_scribe_fallback(monkeypatch):
+    monkeypatch.delenv("AI_PROVIDER", raising=False)
+    with pytest.raises(ValueError, match="scribe"):
+        ap.get_provider()  # default (gemini) is disabled -> actionable error
 
 
 # ── ai_listen uses the injected provider (backend-agnostic) ───────────────────

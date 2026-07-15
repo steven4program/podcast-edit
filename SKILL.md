@@ -33,8 +33,9 @@ they are 100% accurate — no diarization guessing.
 6. After render, confirm verify passed (no mid-word boundary). On ValueError, fix the cut and re-run.
 7. Loudness is render's job: per-track speech leveling (a static per-track speech gain +
    downward-only compand compression — no time-varying gain, which fades phrase tails) evens
-   out speaker gaps and sudden loud/quiet, then global loudnorm -16 LUFS anchors the mix.
-   Render from the original tracks, never a 16k copy.
+   out speaker gaps and sudden loud/quiet, then mastering anchors the mix at -16 LUFS with a
+   measured static gain + a millisecond transient limiter (never dynamic loudness
+   normalization). Render from the original tracks, never a 16k copy.
 8. Source tracks untouched. All artifacts under `<audio_dir>/edit/`.
 
 ## Workflow
@@ -60,22 +61,25 @@ their own output dir, but `flagged.md` is written by you in step 2 — top alway
      `得——`). Keep the confirmed ones. Add macro segment cuts (off-topic, retakes) from packed.md.
      Pre-show chatter is cut BY DEFAULT: macro-cut word 0 up to the host's show-opening
      greeting (類似「嗨，大家好，歡迎來到今天節目」, wording varies — see edit-heuristics).
-   - Fillers: use `helpers.fillers.propose_filler_cuts` (Scribe filler timestamps are
-     unreliable; it finds the sound acoustically and flags the unsafe ones).
+   - Fillers: run `python -m helpers.fillers edit/transcript.json` (Scribe filler
+     timestamps are unreliable; it finds the sound acoustically on the speaker's own
+     track and flags the unsafe ones).
    - Dead air: run `python -m helpers.deadair edit/transcript.json`. It proposes shortening
      every nobody-talking gap ≥1.2s down to 0.8s (word-union across speakers; gaps covered by
      a laughter event are never proposed). REVIEW each: keep a pause that is doing dramatic
      work; also remember laughter/applause isn't words — trust the event protection.
-   - Cough/throat-clear (THE headline goal, recall-first): Scribe's event tagger misses most
-     soft clears, so the primary mechanism is to **sweep the host's OWN track** (needs a
-     provider key — `AI_PROVIDER` + `GEMINI_API_KEY`; OpenAI backend currently disabled):
-     `python -m helpers.ai_listen <host_track> edit/transcript.json <host> --throttle 0`
-     (model backend: gemini — the only enabled provider (OpenAI commented out in ai_providers.py);
-     paid tier: `--throttle 0`; free tier: keep `--throttle 7` and/or `--max-requests N` to cap cost).
-     **Keyless fallback — `--provider scribe`**: reuses the Scribe audio-event tags already in
-     transcript.json (no extra API call, no key). Use it when no provider key is set or the
-     user asks for Scribe/ElevenLabs-only detection, and TELL the user recall is much lower
-     (a test episode: Scribe tagged 13 clears where the sweep found 38, barely overlapping).
+   - Cough/throat-clear (THE headline goal, recall-first): run
+     `python -m helpers.ai_listen <host_track> edit/transcript.json <host>`.
+     **Current mechanism: Scribe-only** (`--provider scribe`, now the CLI default) — it
+     reuses the Scribe audio-event tags already in transcript.json (no extra API call, no
+     key). TELL the user its recall is much lower than the audio-LLM sweep (a test episode:
+     Scribe tagged 13 clears where the sweep found 38, barely overlapping) — soft clears
+     WILL be missed.
+     **Audio-LLM sweep (higher recall, currently DISABLED):** Gemini and OpenAI backends
+     are both commented out in `ai_providers.py` (user request 2026-07-11). To re-enable:
+     uncomment a provider there, restore its dep in pyproject `[ai]`, set the key in .env,
+     then sweep with `--provider gemini` (`--throttle 0` on paid tier; free tier: keep
+     `--throttle 7` and/or `--max-requests N` to cap cost).
      Both paths share the same verify/split pipeline below. The sweep drops silent-window hallucinations
      (`verify_on_track` — an event must have real energy on the host's own track, so another
      speaker talking on their track never counts), and splits hits into:
@@ -105,11 +109,12 @@ their own output dir, but `flagged.md` is written by you in step 2 — top alway
   `--stems` treats OUT as a directory and exports in the source tracks' format (wav in →
   wav out, mp3 in → mp3 out): `final.<ext>` (integrated mix) + one `final_<speaker>.<ext>`
   stem per source track, all cut at the same boundaries (stems keep per-track leveling but
-  skip loudnorm, preserving speaker balance for re-mixing).
-- ai_listen.py — throat/nose-clear discovery on the host track: `sweep_track` (audio-LLM,
-  needs a key) or `scribe_events` (keyless, reuses Scribe's event tags — low recall) →
+  skip mastering, preserving speaker balance for re-mixing).
+- ai_listen.py — throat/nose-clear discovery on the host track: `scribe_events` (keyless,
+  reuses Scribe's event tags — low recall; the current default, since the audio-LLM
+  backends are commented out in ai_providers.py) or `sweep_track` (audio-LLM, disabled) →
   `verify_on_track` (drop hallucinations) → `split_events` (mute gaps / flag co-articulated);
-  `classify` confirms a single clip. [Phase 5]
+  `classify` confirms a single clip (needs an enabled provider). [Phase 5]
 - review.py — transcript.json + cuts.json → `edit/work/review.html`: original vs edited
   players + the transcript annotated with every cut/mute and its reason (offer it to the
   user at the review gate). With `--serve [PORT]` it also serves the page and enables the

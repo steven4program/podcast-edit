@@ -9,29 +9,33 @@ Fillers embedded in continuous speech/stutter (no surrounding silence to bound t
 cross-talk are flagged for manual review, not cut — forcing them would remove real content.
 """
 import numpy as np
-import soundfile as sf
 
-from .render import _protected, verify_no_midword
+from .render import _protected, verify_no_midword, frame_rms
 from .transcribe import speaker_from_filename
 
 _FILLERS = ("呃", "嗯", "啊", "欸")
-_THRESH = 0.012     # RMS above this = voiced
+_FLOOR_K = 5.0      # voiced = RMS above k x the track's own noise floor
+_THRESH_MIN = 1e-4  # never below this (digitally-silent tracks have a ~0 floor)
 _MIN_LEN = 0.05     # ignore voiced runs shorter than this (s)
 _MAX_EXTENT = 1.6   # voiced span longer than this => filler embedded in speech => flag
 _PAD = 0.04
 
 
 def _envelope(path, frame=0.01):
-    x, sr = sf.read(path)
-    if x.ndim > 1:
-        x = x.mean(axis=1)
-    fr = int(frame * sr)
-    n = len(x) // fr
-    rms = np.sqrt((x[:n * fr].reshape(n, fr) ** 2).mean(axis=1))
+    rms, _sr = frame_rms(path, frame)   # streamed — never the whole track in RAM
     return rms, frame
 
 
-def voiced_extent(env, a, b, thresh=_THRESH, min_len=_MIN_LEN, pad=_PAD):
+def _voiced_thresh(rms, k=_FLOOR_K, floor_min=_THRESH_MIN):
+    """Per-track voiced threshold: k x the 10th-percentile RMS (the track's own noise
+    floor — same recipe as ai_listen.verify_on_track). An absolute constant misses
+    fillers on a quiet mic ('already silent') and over-triggers on a hot one."""
+    if not len(rms):
+        return floor_min
+    return max(k * float(np.percentile(rms, 10)), floor_min)
+
+
+def voiced_extent(env, a, b, thresh, min_len=_MIN_LEN, pad=_PAD):
     """First-to-last voiced run within [a, b] (original-timeline seconds), padded. None if silent."""
     rms, step = env
     on = rms[int(a / step):int(b / step)] > thresh
@@ -55,6 +59,7 @@ def propose_filler_cuts(transcript, track_paths):
     ids we couldn't safely cut (embedded in speech / cross-talk / already silent)."""
     words = transcript["words"]
     env = {speaker_from_filename(p): _envelope(p) for p in track_paths}
+    thresh = {spk: _voiced_thresh(e[0]) for spk, e in env.items()}
     content = [w for w in words if _protected(w)]
     cuts, flagged = [], []
     for w in words:
@@ -65,7 +70,8 @@ def propose_filler_cuts(transcript, track_paths):
         if not prev or not nxt or w["speaker"] not in env:
             flagged.append({"id": w["id"], "reason": "no boundary/track"})
             continue
-        ext = voiced_extent(env[w["speaker"]], prev[-1]["end"], nxt[0]["start"])
+        ext = voiced_extent(env[w["speaker"]], prev[-1]["end"], nxt[0]["start"],
+                            thresh[w["speaker"]])
         if ext is None:
             flagged.append({"id": w["id"], "reason": "already silent"})
         elif ext[1] - ext[0] > _MAX_EXTENT or verify_no_midword(list(ext), words):
@@ -74,3 +80,14 @@ def propose_filler_cuts(transcript, track_paths):
             cuts.append({"type": "macro", "start": ext[0], "end": ext[1],
                          "reason": f"filler {w['text'].strip()}"})
     return cuts, flagged
+
+
+if __name__ == "__main__":
+    import argparse, json
+    p = argparse.ArgumentParser(description="Propose acoustic filler cuts (呃嗯啊欸).")
+    p.add_argument("transcript", help="transcript.json (its `tracks` list locates the audio)")
+    a = p.parse_args()
+    t = json.load(open(a.transcript, encoding="utf-8"))
+    tracks = t.get("tracks") or [t["audio"]]
+    cuts, flagged = propose_filler_cuts(t, tracks)
+    print(json.dumps({"cuts": cuts, "flagged": flagged}, ensure_ascii=False, indent=2))

@@ -59,6 +59,21 @@ def test_verify_on_track_drops_silent_hallucinations(tmp_path):
     assert len(kept) == 1 and kept[0]["start"] == 1.0
 
 
+def test_verify_on_track_keeps_real_event_at_time_zero(tmp_path):
+    # Regression: (start - pad) went negative for an event at t≈0; a negative slice
+    # index reads from the END of the track, sees near-silence, and drops a real event.
+    import numpy as np, soundfile as sf
+    sr = 16000
+    np.random.seed(1)
+    x = (1e-4 * np.random.randn(5 * sr)).astype(np.float32)
+    burst = (0.2 * np.sin(2 * np.pi * 200 * np.arange(int(0.2 * sr)) / sr)).astype(np.float32)
+    x[:len(burst)] += burst                                   # real energy at 0.0-0.2s
+    x[-len(burst):] = 0.0                                     # tail is dead silent
+    wav = str(tmp_path / "host.wav"); sf.write(wav, x, sr)
+    kept = ai.verify_on_track([{"start": 0.0, "end": 0.2, "type": "cough"}], wav, k=5.0)
+    assert len(kept) == 1
+
+
 def test_scribe_events_filters_pads_and_merges():
     t = {"events": [
         {"type": "throat_clear", "start": 10.0, "end": 10.0, "speaker": "ted"},  # zero-width

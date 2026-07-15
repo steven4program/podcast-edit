@@ -76,14 +76,16 @@ def normalize_scribe(raw, speaker=None):
             "words": words, "events": events}
 
 
-def merge_tracks(transcripts):
+def merge_tracks(transcripts, duration=None):
+    """`duration` is the real audio length (ffprobe); the word-end fallback truncates
+    the tail after the last word (render would cut room tone / outro sounds there)."""
     all_words = [w for t in transcripts for w in t["words"]]
     all_events = [ev for t in transcripts for ev in t["events"]]
     all_words.sort(key=lambda w: (w["start"], w["speaker"] or ""))
     for i, w in enumerate(all_words):
         w["id"] = i
     all_events.sort(key=lambda ev: ev["start"])
-    duration = max((w["end"] for w in all_words), default=0.0)
+    duration = max(duration or 0.0, max((w["end"] for w in all_words), default=0.0))
     return {"audio": "", "tracks": [], "duration": duration, "words": all_words, "events": all_events}
 
 
@@ -170,10 +172,27 @@ def _extract_voiced_wav(audio_path, segments):
 
 
 def _remap_transcript(transcript, segments):
+    """Map the trimmed-timeline transcript back onto the original timeline.
+
+    A token whose trimmed span straddles a VAD seam gets its END stretched across the
+    REMOVED silence once remapped (measured: a 嗯 became 10s, a ， 54s — such a token
+    pollutes the packed view and its word-guard span blocks every cut under it). The
+    speaker is silent past the seam by VAD's own determination, so the sound cannot
+    extend beyond the voiced segment the token STARTS in: cap the end there, then
+    re-apply the per-character budget (junk durations inside a single long segment)."""
+    def _seg_end(t):
+        return next((e for s, e in segments if s <= t <= e), None)
     for w in transcript["words"]:
         w["start"], w["end"] = remap_to_original(w["start"], segments), remap_to_original(w["end"], segments)
+        cap = _seg_end(w["start"])
+        if cap is not None:
+            w["end"] = min(w["end"], cap)
+        w["end"] = max(w["start"], _clamp_word_end(w["text"], w["start"], w["end"]))
     for ev in transcript["events"]:
         ev["start"], ev["end"] = remap_to_original(ev["start"], segments), remap_to_original(ev["end"], segments)
+        cap = _seg_end(ev["start"])
+        if cap is not None:
+            ev["end"] = max(ev["start"], min(ev["end"], cap))
     transcript["duration"] = max((w["end"] for w in transcript["words"]), default=0.0)
     return transcript
 
@@ -212,6 +231,8 @@ def transcribe(audio_path, out_path, language="zho"):
         json.dump(raw, f, ensure_ascii=False, indent=2)
     transcript = normalize_scribe(raw)
     transcript["audio"] = _posix(audio_path)
+    # real audio length, not last-word end — keep the tail after the last word
+    transcript["duration"] = max(transcript["duration"], _duration(audio_path))
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(transcript, f, ensure_ascii=False, indent=2)
     return transcript
@@ -219,10 +240,11 @@ def transcribe(audio_path, out_path, language="zho"):
 
 def transcribe_multitrack(track_paths, out_path, language="zho"):
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    normalized = []
+    normalized, track_durations = [], []
     for path in track_paths:
         speaker = speaker_from_filename(path)
         duration = _duration(path)
+        track_durations.append(duration)
         segments = voiced_segments(_detect_silence(path, duration), duration)
         if not segments:
             print(f"skip {speaker}: no speech detected", file=sys.stderr)
@@ -237,7 +259,7 @@ def transcribe_multitrack(track_paths, out_path, language="zho"):
             json.dump(raw, f, ensure_ascii=False, indent=2)
         norm = normalize_scribe(raw, speaker=speaker)
         normalized.append(_remap_transcript(norm, segments))
-    merged = merge_tracks(normalized)
+    merged = merge_tracks(normalized, duration=max(track_durations, default=0.0))
     merged["tracks"] = [_posix(p) for p in track_paths]
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(merged, f, ensure_ascii=False, indent=2)
@@ -247,12 +269,17 @@ def transcribe_multitrack(track_paths, out_path, language="zho"):
 _AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".flac", ".aac", ".ogg"}
 
 if __name__ == "__main__":
-    inp, out = sys.argv[1], sys.argv[2]
-    if os.path.isdir(inp):
+    import argparse
+    ap = argparse.ArgumentParser(description="Scribe transcription -> canonical transcript.json")
+    ap.add_argument("input", help="tracks dir (multitrack) or a single audio file")
+    ap.add_argument("out", help="output transcript.json path")
+    ap.add_argument("--language", default="zho", help="Scribe language code (default: zho)")
+    a = ap.parse_args()
+    if os.path.isdir(a.input):
         paths = sorted(
-            p for p in (os.path.join(inp, n) for n in os.listdir(inp))
+            p for p in (os.path.join(a.input, n) for n in os.listdir(a.input))
             if os.path.splitext(p)[1].lower() in _AUDIO_EXTS
         )
-        transcribe_multitrack(paths, out)
+        transcribe_multitrack(paths, a.out, language=a.language)
     else:
-        transcribe(inp, out)
+        transcribe(a.input, a.out, language=a.language)

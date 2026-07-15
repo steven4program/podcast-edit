@@ -11,8 +11,8 @@ detect, and render.
 ```
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[ai,dev]"
-cp .env.example .env   # ELEVENLABS_API_KEY (transcription) + a cough-detection provider key
-                       # (AI_PROVIDER=gemini + GEMINI_API_KEY; OpenAI backend currently disabled)
+cp .env.example .env   # ELEVENLABS_API_KEY (transcription; cough detection reuses its
+                       # event tags — the Gemini/OpenAI sweep backends are currently disabled)
 ```
 Requires `ffmpeg` / `ffprobe` on PATH. Cross-platform (macOS/Linux/Windows) — helpers force
 UTF-8 I/O and store source paths posix-style so a transcript works on either OS.

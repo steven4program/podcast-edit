@@ -107,6 +107,21 @@ def test_remap_to_original_adds_back_removed_silence():
     assert tr.remap_to_original(1.5, segs) == pytest.approx(2.1)   # 1.8 + (1.5-1.2)
 
 
+def test_remap_clamps_token_stretched_across_vad_seam():
+    # Trimmed timeline: voiced segs [0,1.0]+[1.0,2.0] map to original [10,11]+[30,31].
+    # A token spanning the seam (0.8-1.2 trimmed) would remap to 10.8-30.2 — 19.4s of
+    # REMOVED silence inside one 嗯. Its end must be capped at its segment's end (11.0).
+    segments = [(10.0, 11.0), (30.0, 31.0)]
+    t = {"words": [{"id": 0, "text": "嗯", "start": 0.8, "end": 1.2, "speaker": "a"},
+                   {"id": 1, "text": "好", "start": 1.3, "end": 1.5, "speaker": "a"}],
+         "events": [{"type": "laughter", "start": 0.9, "end": 1.4, "speaker": "a"}]}
+    out = tr._remap_transcript(t, segments)
+    w0, w1 = out["words"]
+    assert w0["start"] == pytest.approx(10.8) and w0["end"] <= 11.0  # capped at seg end
+    assert w1["start"] == pytest.approx(30.3) and w1["end"] == pytest.approx(30.5)  # untouched
+    assert out["events"][0]["end"] <= 11.0  # events capped the same way
+
+
 def test_merge_tracks_sorts_and_reids():
     track_a = {
         "audio": "", "duration": 1.5,
@@ -129,6 +144,10 @@ def test_merge_tracks_sorts_and_reids():
     assert [w["speaker"] for w in merged["words"]] == ["a", "b", "a"]
     assert merged["duration"] == 1.5
     assert [e["type"] for e in merged["events"]] == ["cough", "laughter"]
+    # real audio length wins over last-word end (tail after the last word must survive
+    # into render); word ends still win if a track's probe came up short
+    assert tr.merge_tracks([track_a, track_b], duration=60.0)["duration"] == 60.0
+    assert tr.merge_tracks([track_a, track_b], duration=1.0)["duration"] == 1.5
 
 
 def test_normalize_clamps_junk_word_durations():
