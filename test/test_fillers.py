@@ -47,6 +47,21 @@ def test_quiet_track_filler_still_found(tmp_path):
     assert 0.9 < cuts[0]["start"] < 1.1 and 1.2 < cuts[0]["end"] < 1.5
 
 
+def test_flags_filler_overlapping_laughter(tmp_path):
+    # 笑聲(0.8-1.3) and 呃(1.5-1.7) share the inter-word window: the first-to-last
+    # voiced extent would cut BOTH. Laughter is never collateral -> flag, not cut.
+    p = str(tmp_path / "2026-06-01--spkL.wav")
+    _track(p, [(0.0, 0.5), (0.8, 1.3), (1.5, 1.7), (2.2, 2.6)])
+    transcript = {"tracks": [p], "words": [
+        {"id": 0, "text": "你好", "start": 0.0, "end": 0.5, "speaker": "spkL"},
+        {"id": 1, "text": "呃", "start": 1.55, "end": 1.56, "speaker": "spkL"},
+        {"id": 2, "text": "再見", "start": 2.2, "end": 2.6, "speaker": "spkL"},
+    ], "events": [{"type": "laughter", "start": 0.8, "end": 1.3, "speaker": "spkL"}]}
+    cuts, flagged = f.propose_filler_cuts(transcript, [p])
+    assert not cuts
+    assert len(flagged) == 1 and flagged[0]["reason"] == "overlaps laughter"
+
+
 def test_flags_filler_embedded_in_continuous_speech(tmp_path):
     # no silence around the filler -> voiced span exceeds _MAX_EXTENT -> flagged, not cut
     p = str(tmp_path / "2026-06-01--spkY.wav")

@@ -99,6 +99,37 @@ def test_scribe_events_padding_stops_at_host_words():
     assert len(mutes) == 1 and not flagged
 
 
+def test_scribe_events_padding_stops_at_host_laughter():
+    # A clear right before his own laugh: the padded mute must clip at the laugh's
+    # start — a mute reaching into a laugh beheads it (laughter is never collateral).
+    t = {"words": [], "events": [
+        {"type": "throat_clear", "start": 10.0, "end": 10.2, "speaker": "ted"},
+        {"type": "laughter", "start": 10.4, "end": 11.0, "speaker": "ted"}]}
+    evs = ai.scribe_events(t, "ted", pad=0.3)
+    assert evs == [{"start": 9.7, "end": 10.4, "type": "throat_clear"}]
+
+
+def test_scribe_events_skips_tag_overlapping_his_laughter():
+    # The tag itself overlaps his laughter -> ambiguous audio, and any detector saying
+    # laughter means keep: not a candidate at all.
+    t = {"words": [], "events": [
+        {"type": "throat_clear", "start": 10.0, "end": 10.5, "speaker": "ted"},
+        {"type": "laughter", "start": 10.4, "end": 11.0, "speaker": "ted"}]}
+    assert ai.scribe_events(t, "ted") == []
+
+
+def test_scribe_events_merge_never_bridges_a_laugh():
+    # Two clears sandwich a 0.3s laugh: each padded span clips at the laugh's edges,
+    # but the 0.4s merge gap would bridge them ACROSS the laugh and the merged mute
+    # would silence it. The bridged span must be dropped whole (lose two mutes, never
+    # behead the laugh).
+    t = {"words": [], "events": [
+        {"type": "throat_clear", "start": 9.8, "end": 10.0, "speaker": "ted"},
+        {"type": "laughter", "start": 10.0, "end": 10.3, "speaker": "ted"},
+        {"type": "cough", "start": 10.3, "end": 10.5, "speaker": "ted"}]}
+    assert ai.scribe_events(t, "ted", pad=0.3) == []
+
+
 def test_split_events_gap_mutes_coarticulated_flags():
     words = [{"id": 0, "text": "你好", "start": 5.0, "end": 5.4, "speaker": "ted35"},
              {"id": 1, "text": "嗎", "start": 8.0, "end": 8.3, "speaker": "tony"}]

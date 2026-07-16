@@ -17,7 +17,8 @@ mechanical work (transcribe, detect, cut, mix).
   transcribe, surface candidates, and render. The agent reads `work/packed.md` + the candidate
   lists and writes `cuts.json`.
 - **Recall-first detection, one mechanism per category** (the agent then *judges* each candidate):
-  - fillers (呃嗯啊欸) — `fillers.py`, acoustic (Scribe's filler timestamps are unreliable).
+  - fillers (呃嗯啊欸) — `fillers.py`, acoustic (Scribe's filler timestamps are unreliable);
+    laughter-safe (an extent overlapping a laughter event is flagged, never cut).
   - cough / throat-clear — `ai_listen.py`. **Currently Scribe-only**: `scribe_events`
     reuses the Scribe event tags in transcript.json (`--provider scribe`, the CLI default;
     keyless). The higher-recall audio-LLM sweep machinery (`sweep_track`/`classify`) stays,
@@ -26,7 +27,9 @@ mechanical work (transcribe, detect, cut, mix).
     logic is backend-agnostic (injected provider); both paths share verify/split.
   - repeats / `-` stutters / `——` false-starts — `repeats.py`, deterministic adjacent-dup scan.
   - dead air — `deadair.py`, word-union gap scan (nobody talking ≥1.2s → shorten to 0.8s);
-    a gap overlapping a laughter event is never proposed.
+    a gap overlapping a laughter event is never proposed, and boundaries are acoustically
+    slid off any real sound (`refine_boundaries` — token times lie: fillers get misplaced
+    near-zero-width tokens, and too-quiet sounds have no tokens at all).
   - The judging step drops false positives: emphasis (`非常非常多`), names (`萬萬`/`汪汪`),
     reduplicated words (`剛剛`), rhetoric (`懂A懂B懂B懂A`).
 - **`render.py` makes output clean by construction** (this is why there is no QA step):

@@ -1,6 +1,8 @@
 """ElevenLabs Scribe -> canonical transcript.json. normalize_scribe is the testable core."""
-import json, os, re, subprocess, sys, tempfile
+import json, math, os, re, subprocess, sys, tempfile
 import requests
+
+from .render import frame_rms
 
 # Scribe emits audio-event labels in the transcription language. For zh audio these
 # are Chinese (e.g. "(清嗓声)" throat clear, "(笑声)" laughter). Substring-matched in order;
@@ -8,6 +10,11 @@ import requests
 _EVENT_KEYWORDS = [
     ("咳", "cough"), ("cough", "cough"),
     ("清嗓", "throat_clear"), ("清喉", "throat_clear"), ("throat", "throat_clear"),
+    # nose-clears/sniffs are first-class candidates (SKILL goal 1 names them explicitly);
+    # they must sit BEFORE the breath/noise entries or 吸鼻/擤鼻涕 fall through to "other"
+    # and the Scribe-only cough path can never surface them (ai_listen's keyword table
+    # already maps nose/sniff — this keeps the two tables consistent).
+    ("鼻", "throat_clear"), ("sniff", "throat_clear"), ("nose", "throat_clear"),
     ("笑", "laughter"), ("laugh", "laughter"),
     ("吸气", "breath"), ("呼吸", "breath"), ("喘", "breath"), ("breath", "breath"),
     ("停顿", "pause"), ("沉默", "pause"), ("静默", "pause"), ("无语", "pause"),
@@ -104,9 +111,15 @@ def _extract_wav(audio_path):
 # back onto the original timeline so the merged tracks stay aligned.
 # ponytail: energy-based ffmpeg silencedetect, enough for these well-isolated
 # mics; swap for Silero VAD if noisy/borderline tracks start leaking.
-_SILENCE_DB = -40     # quieter than this counts as silence
+# The threshold is per-track, relative to the track's own noise floor (see
+# _silence_thresh_db): whatever VAD trims here never reaches Scribe, so it has no
+# words, no events, and NO protection from any downstream guard — an absolute
+# threshold silently erased quiet-but-real speech and laughter from the world.
+_SILENCE_DB = -40     # CAP: never trim more aggressively than this absolute level
 _MIN_SILENCE = 0.3    # seconds of quiet before it's a real gap
 _SPEECH_PAD = 0.2     # seconds kept around each voiced region (don't clip word edges)
+_FLOOR_MARGIN_DB = 18.0  # over the RMS noise floor: silencedetect compares per-sample
+                         # PEAKS (~10dB crest above RMS for noise), +8dB safety
 
 
 def _duration(audio_path):
@@ -116,9 +129,30 @@ def _duration(audio_path):
     return float(out.strip())
 
 
-def _detect_silence(audio_path, duration):
+def _silence_thresh_db(path):
+    """Per-track VAD threshold: the noise floor (10th-percentile 20ms RMS — the same
+    recipe as fillers._voiced_thresh / ai_listen.verify_on_track) plus a margin.
+    An absolute threshold trims real-but-quiet audio: a soft laugh or aside under
+    -40dB never reached Scribe, so it had no words, no laughter event, and no
+    protection anywhere downstream (deadair would even propose cutting it as dead
+    air). Clamped both ways: never MORE aggressive than the old -40 absolute (hot
+    mic -> status quo), never below -60 (a digital-silence floor must not disable
+    trimming — Scribe hallucinates on silence). Undecodable audio (e.g. m4a, which
+    soundfile can't read) falls back to the old constant."""
+    try:
+        rms, _sr = frame_rms(path, 0.02)
+    except Exception:
+        return float(_SILENCE_DB)
+    if not len(rms):
+        return float(_SILENCE_DB)
+    import numpy as np
+    floor_db = 20 * math.log10(max(float(np.percentile(rms, 10)), 1e-6))
+    return round(max(-60.0, min(float(_SILENCE_DB), floor_db + _FLOOR_MARGIN_DB)), 1)
+
+
+def _detect_silence(audio_path, duration, thresh_db=_SILENCE_DB):
     out = subprocess.run(["ffmpeg", "-i", audio_path, "-af",
-                          f"silencedetect=noise={_SILENCE_DB}dB:d={_MIN_SILENCE}", "-f", "null", "-"],
+                          f"silencedetect=noise={thresh_db}dB:d={_MIN_SILENCE}", "-f", "null", "-"],
                          capture_output=True, text=True).stderr
     starts = [float(x) for x in re.findall(r"silence_start: ([\d.]+)", out)]
     ends = [float(x) for x in re.findall(r"silence_end: ([\d.]+)", out)]
@@ -171,25 +205,49 @@ def _extract_voiced_wav(audio_path, segments):
     return wav
 
 
-def _remap_transcript(transcript, segments):
+def _remap_transcript(transcript, segments, pad=_SPEECH_PAD):
     """Map the trimmed-timeline transcript back onto the original timeline.
 
-    A token whose trimmed span straddles a VAD seam gets its END stretched across the
-    REMOVED silence once remapped (measured: a 嗯 became 10s, a ， 54s — such a token
-    pollutes the packed view and its word-guard span blocks every cut under it). The
-    speaker is silent past the seam by VAD's own determination, so the sound cannot
+    END side: a token whose trimmed span straddles a VAD seam gets its END stretched
+    across the REMOVED silence once remapped (measured: a 嗯 became 10s, a ， 54s — such
+    a token pollutes the packed view and its word-guard span blocks every cut under it).
+    The speaker is silent past the seam by VAD's own determination, so the sound cannot
     extend beyond the voiced segment the token STARTS in: cap the end there, then
-    re-apply the per-character budget (junk durations inside a single long segment)."""
+    re-apply the per-character budget (junk durations inside a single long segment).
+
+    START side: a token that STARTS inside the trailing speech-pad of a segment and runs
+    past the seam belongs to the NEXT segment — that pad zone is VAD-certified silence
+    (voiced_segments appends it after detected speech ends), so no word onset can be
+    there; Scribe placed the onset slightly early. Without the shift, remap parks the
+    token at the PREVIOUS segment's tail — minutes from its real position when a long
+    silence was removed — so packed.md misorders it and the mid-word guard protects a
+    phantom while the real word goes unguarded."""
+    seams, cum = [], 0.0                      # trimmed-time position of each segment's end
+    for s, e in segments:
+        cum += e - s
+        seams.append(cum)
+
+    def _shifted_start(ts, te):
+        for i, c in enumerate(seams[:-1]):
+            if c - pad < ts <= c < te:
+                return segments[i + 1][0]
+        return None
+
     def _seg_end(t):
         return next((e for s, e in segments if s <= t <= e), None)
+
     for w in transcript["words"]:
-        w["start"], w["end"] = remap_to_original(w["start"], segments), remap_to_original(w["end"], segments)
+        shifted = _shifted_start(w["start"], w["end"])
+        w["end"] = remap_to_original(w["end"], segments)
+        w["start"] = shifted if shifted is not None else remap_to_original(w["start"], segments)
         cap = _seg_end(w["start"])
         if cap is not None:
             w["end"] = min(w["end"], cap)
         w["end"] = max(w["start"], _clamp_word_end(w["text"], w["start"], w["end"]))
     for ev in transcript["events"]:
-        ev["start"], ev["end"] = remap_to_original(ev["start"], segments), remap_to_original(ev["end"], segments)
+        shifted = _shifted_start(ev["start"], ev["end"])
+        ev["end"] = remap_to_original(ev["end"], segments)
+        ev["start"] = shifted if shifted is not None else remap_to_original(ev["start"], segments)
         cap = _seg_end(ev["start"])
         if cap is not None:
             ev["end"] = max(ev["start"], min(ev["end"], cap))
@@ -245,7 +303,8 @@ def transcribe_multitrack(track_paths, out_path, language="zho"):
         speaker = speaker_from_filename(path)
         duration = _duration(path)
         track_durations.append(duration)
-        segments = voiced_segments(_detect_silence(path, duration), duration)
+        segments = voiced_segments(_detect_silence(path, duration, _silence_thresh_db(path)),
+                                   duration)
         if not segments:
             print(f"skip {speaker}: no speech detected", file=sys.stderr)
             continue

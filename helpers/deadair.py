@@ -5,9 +5,14 @@ A recall aid like repeats.py — deterministic scan, the LLM reviews each propos
 never proposed: laughter is content (hard rule). Each qualifying gap is shortened to
 `keep` seconds — half left after the last word, half before the next — so the cut sits
 in the middle of the silence and speech rhythm stays natural. Proposals are macro cuts
-(start/end seconds); render snap + the mid-word guard keep the seams safe.
+(start/end seconds); refine_boundaries then slides each boundary off any REAL sound on
+any track — token times lie (Scribe parks filler tokens away from their sound, and a
+too-quiet sound may have no token at all), and the mid-word guard can't see what was
+never tokenized. render's snap + mid-word guard keep the seams safe after that.
 """
-import json
+import json, sys
+
+from .fillers import _envelope, _voiced_thresh
 
 
 def find_dead_air(words, events=None, min_gap=1.2, keep=0.8):
@@ -29,6 +34,54 @@ def find_dead_air(words, events=None, min_gap=1.2, keep=0.8):
     return out
 
 
+def _slide(env, thresh, t, forward):
+    """t inside a voiced run (frame RMS > thresh) -> the run's outer edge in the given
+    direction; else t unchanged."""
+    rms, step = env
+    i = int(t / step)
+    if i < 0 or i >= len(rms) or rms[i] <= thresh:
+        return t
+    if forward:
+        while i < len(rms) and rms[i] > thresh:
+            i += 1
+        return i * step
+    while i >= 0 and rms[i] > thresh:
+        i -= 1
+    return (i + 1) * step
+
+
+def refine_boundaries(cuts, track_paths, pad=0.05, min_cut=0.3):
+    """Slide every proposal boundary off real sound, checked on every track.
+    find_dead_air trusts token times, but Scribe parks fillers' tokens away from their
+    sound and never tokenizes some quiet sounds at all — so a boundary can land INSIDE
+    a sound, where the mid-word guard (token-based, fillers exempt) cannot see it and
+    render's 0.3s snap window may not reach silence. A cut START inside a voiced run
+    slides forward past it, an END slides back; a proposal that shrinks under min_cut
+    is dropped (the 'gap' was really sound). Boundaries already in silence — including
+    gaps that merely CONTAIN a breath without touching a boundary — pass through
+    untouched, so recall is unaffected."""
+    envs = []
+    for p in track_paths:
+        env = _envelope(p)
+        envs.append((env, _voiced_thresh(env[0])))
+    if not envs:
+        return list(cuts)
+    out = []
+    for c in cuts:
+        s, e = c["start"], c["end"]
+        for _ in range(4):  # sliding off one track's sound can land in another's
+            ns = max(_slide(env, th, s, True) for env, th in envs)
+            ne = min(_slide(env, th, e, False) for env, th in envs)
+            if ns == s and ne == e:
+                break
+            s, e = ns, ne
+        s = s + pad if s != c["start"] else s
+        e = e - pad if e != c["end"] else e
+        if e - s >= min_cut:
+            out.append({**c, "start": round(s, 3), "end": round(e, 3)})
+    return out
+
+
 if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser(description="Propose cuts that shorten long dead air.")
@@ -38,4 +91,10 @@ if __name__ == "__main__":
     a = p.parse_args()
     t = json.load(open(a.transcript, encoding="utf-8"))
     cuts = find_dead_air(t["words"], t.get("events"), a.min_gap, a.keep)
+    tracks = t.get("tracks") or ([t["audio"]] if t.get("audio") else [])
+    if tracks:
+        try:
+            cuts = refine_boundaries(cuts, tracks)
+        except Exception as e:  # missing/undecodable audio -> ship the raw proposals
+            print(f"deadair: acoustic boundary check skipped ({e})", file=sys.stderr)
     print(json.dumps({"dead_air": cuts}, ensure_ascii=False, indent=2))

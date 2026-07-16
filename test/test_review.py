@@ -67,6 +67,20 @@ def test_build_html_multi_version_players_and_labeled_mutes():
     assert page.count('data-v=') == 3               # 全部 + one button per version
 
 
+def test_original_mix_is_peak_limited(tmp_path):
+    # Two hot tracks summed with amix normalize=0 exceed 0dBFS; the 'before' reference
+    # must not clip into distortion (it would mislead A/B listening) — the transient
+    # limiter caps the sum at its -2dB ceiling instead.
+    import numpy as np, soundfile as sf
+    sr = 16000
+    tone = (0.9 * np.sin(2 * np.pi * 220 * np.arange(sr) / sr)).astype(np.float32)
+    a, b = str(tmp_path / "a.wav"), str(tmp_path / "b.wav")
+    sf.write(a, tone, sr); sf.write(b, tone, sr)
+    out = rv.build_original_mix([a, b], str(tmp_path / "orig.wav"))
+    x, _ = sf.read(out)
+    assert 0.5 < float(np.abs(x).max()) <= 0.85  # limited (~-2dB), not 1.0-clipped
+
+
 def test_parse_range_forms_and_clamping():
     # <audio> seeking depends on 206 ranges; cover the three header forms + junk.
     assert rv.parse_range("bytes=0-99", 1000) == (0, 99)

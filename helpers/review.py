@@ -10,7 +10,7 @@ import argparse, html, json, os, subprocess
 
 from opencc import OpenCC
 
-from .render import resolve_cut_times, compute_kept_segments
+from .render import resolve_cut_times, compute_kept_segments, _MASTER
 
 _CC = OpenCC("s2twp")  # display in zh-TW, same as pack.py; transcript.json stays as-is
 
@@ -347,11 +347,14 @@ def serve(out_html, transcript_path, cuts_path, stems_dir, port=8765):
 
 
 def build_original_mix(tracks, out_path):
-    """Plain unprocessed amix of the source tracks — the 'before' reference."""
+    """Plain amix of the source tracks — the 'before' reference. normalize=0 keeps true
+    per-track levels, so simultaneous speakers can sum past 0dBFS; the transient limiter
+    (render's _MASTER, transparent below its -2dB ceiling) stops the reference player
+    clipping into distortion, which would mislead A/B listening at the review gate."""
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     inputs = [x for t in tracks for x in ("-i", t)]
     subprocess.run(["ffmpeg", "-y", *inputs, "-filter_complex",
-                    f"amix=inputs={len(tracks)}:normalize=0[m]", "-map", "[m]", out_path],
+                    f"amix=inputs={len(tracks)}:normalize=0,{_MASTER}[m]", "-map", "[m]", out_path],
                    check=True, capture_output=True)
     return out_path
 

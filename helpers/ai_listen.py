@@ -166,20 +166,35 @@ def scribe_events(transcript, host, pad=0.3):
     sweep found 38, with almost no overlap — so this is the fallback when no provider
     key is available (or the user asks for Scribe-only). Scribe often parks a tag at
     zero width, so events are padded — but the padding is clipped at the host's own word
-    boundaries: only the RAW tag span decides mute-vs-flag in split_events, padding into
-    a neighbouring word must not fake a co-articulation."""
+    boundaries AND his own laughter events: only the RAW tag span decides mute-vs-flag
+    in split_events (padding into a neighbouring word must not fake a co-articulation),
+    and a mute reaching into a laugh would behead it — laughter is never collateral.
+    A tag overlapping his laughter at all is no candidate (any detector saying laughter
+    means keep)."""
     hw = [w for w in transcript.get("words", [])
           if w.get("speaker") == host and _protected(w)]
+    hl = [ev for ev in transcript.get("events", [])
+          if ev.get("speaker") == host and ev.get("type") == "laughter"]
+
+    def _overlaps_laugh(s, e):
+        return any(l["start"] < e and s < l["end"] for l in hl)
+
     out = []
     for ev in transcript.get("events", []):
         if ev.get("speaker") != host or ev.get("type") not in ("throat_clear", "cough"):
             continue
-        prev_end = max((w["end"] for w in hw if w["end"] <= ev["start"]), default=0.0)
-        next_start = min((w["start"] for w in hw if w["start"] >= ev["end"]), default=float("inf"))
+        if _overlaps_laugh(ev["start"], ev["end"]):
+            continue
+        prev_end = max((t for t in [w["end"] for w in hw] + [l["end"] for l in hl]
+                        if t <= ev["start"]), default=0.0)
+        next_start = min((t for t in [w["start"] for w in hw] + [l["start"] for l in hl]
+                          if t >= ev["end"]), default=float("inf"))
         s = min(max(ev["start"] - pad, prev_end, 0.0), ev["start"])
         e = max(min(ev["end"] + pad, next_start), ev["end"])
         out.append({"start": round(s, 3), "end": round(e, 3), "type": ev["type"]})
-    return _merge(out)
+    # two clears sandwiching a laugh shorter than the merge gap would bridge it — drop
+    # any merged span that overlaps a laugh (lose two mutes, never behead the laugh)
+    return [e for e in _merge(out) if not _overlaps_laugh(e["start"], e["end"])]
 
 
 def sweep_track(audio_path, provider=None, window=12.0, hop=11.0,

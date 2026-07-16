@@ -12,6 +12,8 @@ cut on the token span — use `helpers.fillers.propose_filler_cuts`, which locat
 filler SOUND acoustically in the gap between the surrounding content words, on that speaker's
 own track. Fillers embedded in continuous speech/stutter or in cross-talk are **flagged, not
 cut** (review manually; cross-talk ones are handled in Phase 5 by muting that speaker's track).
+A filler whose voiced extent overlaps a laughter event is also flagged, never cut — the
+extent is first-to-last sound in the gap, so the cut would swallow the laugh with it.
 
 ## Repeat-collapse (PRIORITY #1) — delete-earlier, keep-later
 Recall comes from `helpers.repeats` (adjacent-duplicate scan, per speaker) — run it instead
@@ -72,6 +74,9 @@ skill. Hunt aggressively — the cough-prone host clears his throat/nose almost 
 ## Dead air
 Ignore ≤0.5s. Recall comes from `helpers.deadair` (word-union gaps ≥1.2s → shorten to 0.8s,
 half kept on each side; laughter-covered pauses are never proposed — laughter is content).
+Boundaries are acoustically verified on every track and slid off any real sound
+(`refine_boundaries`): token times lie for fillers, and a too-quiet sound may have no
+token at all — a proposal that turns out to be all sound is dropped.
 Review each proposal: keep a pause doing dramatic work (a beat before a punchline, letting a
 point land). Note the scan runs on the ORIGINAL timeline — cuts that join two silences can
 still leave a longer-than-ideal pause in the output; spot-check the preview if rhythm matters.

@@ -63,10 +63,12 @@ their own output dir, but `flagged.md` is written by you in step 2 — top alway
      greeting (類似「嗨，大家好，歡迎來到今天節目」, wording varies — see edit-heuristics).
    - Fillers: run `python -m helpers.fillers edit/transcript.json` (Scribe filler
      timestamps are unreliable; it finds the sound acoustically on the speaker's own
-     track and flags the unsafe ones).
+     track and flags the unsafe ones — embedded in speech, cross-talk, or overlapping
+     laughter).
    - Dead air: run `python -m helpers.deadair edit/transcript.json`. It proposes shortening
      every nobody-talking gap ≥1.2s down to 0.8s (word-union across speakers; gaps covered by
-     a laughter event are never proposed). REVIEW each: keep a pause that is doing dramatic
+     a laughter event are never proposed; boundaries are acoustically slid off any real
+     sound the tokens don't show). REVIEW each: keep a pause that is doing dramatic
      work; also remember laughter/applause isn't words — trust the event protection.
    - Cough/throat-clear (THE headline goal, recall-first): run
      `python -m helpers.ai_listen <host_track> edit/transcript.json <host>`.
@@ -104,7 +106,8 @@ their own output dir, but `flagged.md` is written by you in step 2 — top alway
 - transcribe.py — multitrack dir (or single file) → transcript.json (words+speaker+events).
 - pack.py — transcript.json → packed.md (zh-TW reading view).
 - repeats.py — adjacent-duplicate + `——` false-start finder (recall aid); LLM reviews candidates.
-- deadair.py — long nobody-talking gaps → shorten-to-0.8s macro-cut proposals (laughter-safe).
+- deadair.py — long nobody-talking gaps → shorten-to-0.8s macro-cut proposals (laughter-safe,
+  boundaries acoustically verified per track).
 - render.py — transcript.json + cuts.json → preview/final.mp3 + kept_transcript.json (per-track cut → mix).
   `--stems` treats OUT as a directory and exports in the source tracks' format (wav in →
   wav out, mp3 in → mp3 out): `final.<ext>` (integrated mix) + one `final_<speaker>.<ext>`

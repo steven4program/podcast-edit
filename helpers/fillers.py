@@ -7,6 +7,9 @@ gap between the two surrounding CONTENT words, on that speaker's own track.
 
 Fillers embedded in continuous speech/stutter (no surrounding silence to bound them) or in
 cross-talk are flagged for manual review, not cut — forcing them would remove real content.
+A filler whose voiced extent overlaps a laughter event is flagged too: the extent is
+first-to-last sound in the gap, so a laugh beside the 呃 would be swallowed by the same
+cut — and laughter is never collateral (hard rule).
 """
 import numpy as np
 
@@ -56,8 +59,13 @@ def voiced_extent(env, a, b, thresh, min_len=_MIN_LEN, pad=_PAD):
 
 def propose_filler_cuts(transcript, track_paths):
     """-> (cuts, flagged). cuts: macro cut dicts on the actual filler sound. flagged: filler
-    ids we couldn't safely cut (embedded in speech / cross-talk / already silent)."""
+    ids we couldn't safely cut (embedded in speech / cross-talk / overlapping laughter /
+    already silent)."""
     words = transcript["words"]
+    # ANY speaker's laughter blocks a cut: a filler cut removes timeline from every track,
+    # so a guest laughing over the host's 呃 would be deleted with it.
+    laughs = [(e["start"], e["end"]) for e in transcript.get("events", [])
+              if e.get("type") == "laughter"]
     env = {speaker_from_filename(p): _envelope(p) for p in track_paths}
     thresh = {spk: _voiced_thresh(e[0]) for spk, e in env.items()}
     content = [w for w in words if _protected(w)]
@@ -74,6 +82,8 @@ def propose_filler_cuts(transcript, track_paths):
                             thresh[w["speaker"]])
         if ext is None:
             flagged.append({"id": w["id"], "reason": "already silent"})
+        elif any(ls < ext[1] and ext[0] < le for ls, le in laughs):
+            flagged.append({"id": w["id"], "reason": "overlaps laughter"})
         elif ext[1] - ext[0] > _MAX_EXTENT or verify_no_midword(list(ext), words):
             flagged.append({"id": w["id"], "reason": "embedded in speech / cross-talk"})
         else:
