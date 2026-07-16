@@ -111,6 +111,25 @@ def test_filler_cut_not_collapsed_by_snap(tmp_path):
     assert removed > 0.15  # the ~0.25s filler span was actually removed, not snapped away
 
 
+def test_render_snap_false_cut_keeps_acoustic_boundaries(tmp_path):
+    # A filler cut's extent is acoustically exact (speaker's own track, floor-relative
+    # threshold). render's snap works off the MIX's -35dB silencedetect and dragged
+    # such boundaries back INTO the sound (measured 36-222ms of a removed 呃 audible
+    # in the output). "snap": false must keep the span byte-exact.
+    wav, out = str(tmp_path / "in.wav"), str(tmp_path / "out.mp3")
+    make_test_wav(wav)  # tone 0-1.5s, silence 1.5-2.2s, tone 2.2-3.7s
+    t = {"audio": wav, "duration": 4.0, "words": [
+        {"id": 0, "text": "好", "start": 0.3, "end": 1.0, "speaker": "a"}]}
+    cut = {"type": "macro", "start": 1.3, "end": 1.8, "snap": False, "reason": "filler 呃"}
+    res = r.render(t, [cut], wav, out)
+    assert (1.3, 1.8) not in res["segments"]           # sanity: the cut happened
+    bounds = [b for seg in res["segments"] for b in seg]
+    assert 1.3 in bounds and 1.8 in bounds             # exact span, no snap (1.5 edge nearby)
+    # same cut WITHOUT the flag gets snapped (start pulled to the 1.5 silence edge)
+    res2 = r.render(t, [{**cut, "snap": None}], wav, str(tmp_path / "out2.mp3"))
+    assert 1.3 not in [b for seg in res2["segments"] for b in seg]
+
+
 def test_render_short_cut_not_collapsed_by_snap(tmp_path):
     # A sub-0.1s stutter cut near a silence: if it snapped, both ends would grab the
     # same edge and erase (or shift) the cut. Word-id cuts skip snapping, so word 1 goes.

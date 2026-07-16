@@ -25,6 +25,9 @@ def test_acoustic_cut_lands_on_real_sound_not_token(tmp_path):
     assert len(cuts) == 1 and not flagged
     # cut lands on the actual 呃 sound (~1.0-1.3), NOT the token position (2.4)
     assert 0.9 < cuts[0]["start"] < 1.1 and 1.2 < cuts[0]["end"] < 1.5
+    # the extent IS the acoustic boundary — render must not re-snap it to the mix's
+    # cruder silencedetect edges (that left 36-222ms of the 呃 in the output)
+    assert cuts[0]["snap"] is False
 
 
 def test_quiet_track_filler_still_found(tmp_path):

@@ -145,14 +145,18 @@ def verify_on_track(events, host_track, k=5.0, pad=0.06):
     return out
 
 
-def split_events(events, words, host, eps=0.05):
-    """gap -> mute (safe), co-articulated with host's own content word -> flag."""
+def split_events(events, words, host, eps=0.05, min_mute=0.15):
+    """gap -> mute (safe), co-articulated with host's own content word -> flag.
+    An event narrower than min_mute is flagged too: a real clear is longer than that,
+    so a tiny span means a zero-width Scribe tag whose padding was clipped away by
+    words on both sides — the actual sound extends UNDER those words (co-articulated),
+    and a 20ms mute silences nothing while the review page claims it handled it."""
     hw = [w for w in words if w.get("speaker") == host and _protected(w)]
     mutes, flagged = [], []
     for ev in events:
         coarticulated = any(w["start"] + eps < ev["end"] and ev["start"] < w["end"] - eps
                             for w in hw)
-        if coarticulated:
+        if coarticulated or ev["end"] - ev["start"] < min_mute:
             flagged.append(ev)
         else:
             mutes.append({"speaker": host, "start": ev["start"], "end": ev["end"]})

@@ -402,8 +402,14 @@ def render(transcript, cuts, audio_path, out_path, snap_window=0.3, mutes=None,
     for c in resolved:
         # Word-id cuts (repeats/stutters) are already on word edges — snapping a short
         # intra-speech cut to a nearby silence drags it onto adjacent words. The mid-word
-        # guard + 3ms fades keep the seam clean. Only acoustic/segment cuts snap.
-        if c.get("start_word") is not None:
+        # guard + 3ms fades keep the seam clean. Only hand-placed segment cuts snap:
+        # a cut carrying "snap": false has ACOUSTICALLY determined boundaries (fillers'
+        # voiced extent, deadair's refined edges — found on the speaker's own track with
+        # a noise-floor-relative threshold). Re-snapping those to the mix's silencedetect
+        # edges (absolute -35dB, 0.3s minimum — much cruder) drags the boundary back
+        # INTO the sound: measured 36-222ms of a removed 呃 surviving into the output
+        # while the transcript showed it struck through.
+        if c.get("start_word") is not None or c.get("snap") is False:
             continue
         ns, s1 = safe_snap(c["start"], silences, words, snap_window)
         ne, s2 = safe_snap(c["end"], silences, words, snap_window)

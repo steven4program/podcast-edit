@@ -78,7 +78,10 @@ def refine_boundaries(cuts, track_paths, pad=0.05, min_cut=0.3):
         s = s + pad if s != c["start"] else s
         e = e - pad if e != c["end"] else e
         if e - s >= min_cut:
-            out.append({**c, "start": round(s, 3), "end": round(e, 3)})
+            # snap: false — boundaries just verified against every track's own audio;
+            # deadair cuts sit mid-silence BY DESIGN (keep/2 each side), and render's
+            # snap would drag them to the silence EDGES, distorting the kept pause.
+            out.append({**c, "start": round(s, 3), "end": round(e, 3), "snap": False})
     return out
 
 

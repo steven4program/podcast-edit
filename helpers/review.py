@@ -222,13 +222,17 @@ document.getElementById("done").addEventListener("click", async () => {{
 """
 
 
-def build_html(transcript, spec, orig_src, edits, title="episode"):
+def build_html(transcript, spec, orig_src, edits, title="episode", segments=None):
     """edits: [(label, src)] — one player per edited version (all must share the same
-    cuts; only mutes may differ, which don't move the timeline)."""
+    cuts; only mutes may differ, which don't move the timeline). `segments`: the kept
+    segments the edited audio was ACTUALLY rendered with (render's kept_transcript.json
+    carries them). Recomputing them here resolves the cuts WITHOUT render's snap step,
+    so the seek map drifted from the real edited timeline — measured >1s of click-to-seek
+    error by the end of an episode. Fallback to recomputing when no render output exists."""
     if isinstance(edits, str):          # back-compat: a single edited source
         edits = [("剪輯後", edits)]
     rows, resolved, labels = _rows(transcript, spec)
-    segs = compute_kept_segments(resolved, transcript["duration"])
+    segs = segments or compute_kept_segments(resolved, transcript["duration"])
     players = "\n".join(
         f'  <div class="player"><b>{_tw(label)}</b>'
         f'<audio class="edit" controls preload="metadata" src="{html.escape(src)}"></audio></div>'
@@ -388,9 +392,15 @@ if __name__ == "__main__":
         orig = build_original_mix(sources, os.path.join(out_dir, "original_mix.mp3"))
     rel = lambda p_: os.path.relpath(p_, out_dir).replace("\\", "/")
     default_final = os.path.join(os.path.dirname(a.transcript) or ".", "out", "final.mp3")
-    edits = [(lab, rel(path)) for item in (a.edited or [f"剪輯後={default_final}"])
-             for lab, path in [item.split("=", 1)]]
-    page = build_html(t, spec, rel(orig), edits,
+    edit_paths = [(lab, path) for item in (a.edited or [f"剪輯後={default_final}"])
+                  for lab, path in [item.split("=", 1)]]
+    edits = [(lab, rel(path)) for lab, path in edit_paths]
+    # seek map: prefer the segments the edited audio was actually rendered with
+    segments = None
+    kept_path = os.path.splitext(edit_paths[0][1])[0] + "_kept_transcript.json"
+    if os.path.isfile(kept_path):
+        segments = json.load(open(kept_path, encoding="utf-8")).get("segments")
+    page = build_html(t, spec, rel(orig), edits, segments=segments,
                       title=os.path.basename(os.path.abspath(out_dir + "/..")))
     with open(a.out_html, "w", encoding="utf-8") as f:
         f.write(page)

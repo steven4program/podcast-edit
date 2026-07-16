@@ -138,3 +138,14 @@ def test_split_events_gap_mutes_coarticulated_flags():
     mutes, flagged = ai.split_events(events, words, host="ted35")
     assert mutes == [{"speaker": "ted35", "start": 6.0, "end": 6.3}]
     assert len(flagged) == 1 and flagged[0]["start"] == 5.1
+
+
+def test_split_events_flags_span_too_narrow_to_mute():
+    # A zero-width Scribe tag whose padding was clipped by words on both sides yields a
+    # ~20ms span: the real clear extends UNDER the words, so a mute silences nothing
+    # while the review page claims it handled it. Too-narrow -> flag, not mute.
+    words = [{"id": 0, "text": "好", "start": 9.5, "end": 10.28, "speaker": "ted"},
+             {"id": 1, "text": "對", "start": 10.31, "end": 10.8, "speaker": "ted"}]
+    events = [{"start": 10.29, "end": 10.31, "type": "throat_clear"}]  # 20ms gap event
+    mutes, flagged = ai.split_events(events, words, host="ted")
+    assert mutes == [] and len(flagged) == 1

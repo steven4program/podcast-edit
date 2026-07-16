@@ -43,6 +43,14 @@ def test_build_html_shows_cuts_mutes_and_seek_data():
     assert 'src="orig.mp3"' in page and 'src="edited.mp3"' in page
 
 
+def test_build_html_uses_rendered_segments_for_seek_map():
+    # The seek map must come from the segments the edited audio was ACTUALLY rendered
+    # with (render snaps macro cuts; recomputing here drifted >1s by episode end).
+    page = rv.build_html(sample_transcript(), _spec(), "o.mp3", "e.mp3",
+                         segments=[[0.5, 2.0], [2.5, 4.0]])
+    assert "const SEGS = [[0.5, 2.0], [2.5, 4.0]]" in page
+
+
 def test_build_html_has_done_button_wired_to_export():
     page = rv.build_html(sample_transcript(), _spec(), "orig.mp3", "edited.mp3")
     assert 'id="done"' in page                       # the 完成 button exists

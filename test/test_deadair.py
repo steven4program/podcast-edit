@@ -59,6 +59,7 @@ def test_refine_slides_boundary_off_untokenized_sound(tmp_path):
     assert len(refined) == 1
     assert refined[0]["start"] >= 2.5               # slid past the sound (+pad)
     assert refined[0]["end"] == cuts[0]["end"]      # end already in silence: untouched
+    assert refined[0]["snap"] is False              # verified boundaries: render must not re-snap
 
 
 def test_refine_drops_proposal_that_is_really_sound(tmp_path):
@@ -78,4 +79,6 @@ def test_refine_keeps_truly_silent_gap_untouched(tmp_path):
     _track(p, [(0.5, 1.0), (3.5, 3.9)])
     words = [_w(0, 0.5, 1.0), _w(1, 3.5, 3.9)]
     cuts = find_dead_air(words)
-    assert refine_boundaries(cuts, [p]) == cuts
+    out = refine_boundaries(cuts, [p])
+    assert [(c["start"], c["end"]) for c in out] == [(c["start"], c["end"]) for c in cuts]
+    assert all(c["snap"] is False for c in out)  # verified boundaries opt out of render's snap

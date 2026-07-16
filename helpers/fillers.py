@@ -87,8 +87,11 @@ def propose_filler_cuts(transcript, track_paths):
         elif ext[1] - ext[0] > _MAX_EXTENT or verify_no_midword(list(ext), words):
             flagged.append({"id": w["id"], "reason": "embedded in speech / cross-talk"})
         else:
+            # snap: false — the extent IS the acoustic boundary (this speaker's own
+            # track, floor-relative threshold). render's silence-snap works off the
+            # MIX's cruder silencedetect and would drag the edge back into the sound.
             cuts.append({"type": "macro", "start": ext[0], "end": ext[1],
-                         "reason": f"filler {w['text'].strip()}"})
+                         "snap": False, "reason": f"filler {w['text'].strip()}"})
     return cuts, flagged
 
 
