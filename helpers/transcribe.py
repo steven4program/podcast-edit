@@ -2,6 +2,7 @@
 import json, math, os, re, subprocess, sys, tempfile
 import requests
 
+from . import require_env
 from .render import frame_rms
 
 # Scribe emits audio-event labels in the transcription language. For zh audio these
@@ -199,9 +200,19 @@ def _extract_voiced_wav(audio_path, segments):
                     for i, (s, e) in enumerate(segments))
     labels = "".join(f"[s{i}]" for i in range(len(segments)))
     fc = f"{trims}{labels}concat=n={len(segments)}:v=0:a=1[out]"
-    subprocess.run(["ffmpeg", "-y", "-i", audio_path, "-filter_complex", fc,
-                    "-map", "[out]", "-ac", "1", "-ar", "16000", wav],
-                   check=True, capture_output=True)
+    # A full-length episode yields hundreds of VAD segments -> a filtergraph far past the
+    # OS command-line limit (Windows CreateProcess caps at ~32k chars). Hand it to ffmpeg
+    # via a script file, same as render._run_ffmpeg. Portable, no length ceiling.
+    fd, fc_path = tempfile.mkstemp(suffix=".ffscript")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(fc)
+    try:
+        subprocess.run(["ffmpeg", "-y", "-i", audio_path,
+                        "-filter_complex_script", fc_path,
+                        "-map", "[out]", "-ac", "1", "-ar", "16000", wav],
+                       check=True, capture_output=True)
+    finally:
+        os.remove(fc_path)
     return wav
 
 
@@ -256,7 +267,8 @@ def _remap_transcript(transcript, segments, pad=_SPEECH_PAD):
 
 
 def _scribe(wav_path, language, diarize):
-    key = os.environ["ELEVENLABS_API_KEY"]
+    key = require_env("ELEVENLABS_API_KEY",
+                      "Get one at https://elevenlabs.io -> Profile -> API Keys.")
     with open(wav_path, "rb") as f:
         resp = requests.post("https://api.elevenlabs.io/v1/speech-to-text",
                              headers={"xi-api-key": key},

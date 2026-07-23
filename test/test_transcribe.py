@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 import helpers.transcribe as tr
@@ -232,3 +234,22 @@ def test_normalize_clamps_junk_word_durations():
     t = normalize_scribe(raw, speaker="a")
     assert t["words"][0]["end"] <= 349.0 + 1.0   # 98s junk clamped hard
     assert t["words"][1]["end"] == 448.5         # normal duration untouched
+
+
+def test_extract_voiced_wav_survives_many_segments(tmp_path):
+    # A full-length episode yields hundreds of VAD segments. Passed inline the filtergraph
+    # blew past the OS argv cap (Windows CreateProcess: WinError 206) and transcription died
+    # on the real episode while every 5-minute fixture passed. Must go via a script file.
+    import numpy as np, soundfile as sf
+    sr = 16000
+    n_seg = 700
+    x = (0.3 * np.sin(2 * np.pi * 200 * np.arange(int(80.0 * sr)) / sr)).astype(np.float32)
+    p = str(tmp_path / "long.wav"); sf.write(p, x, sr)
+    segs = [(i * 0.1, i * 0.1 + 0.05) for i in range(n_seg)]
+    assert len("".join(f"[0:a]atrim={s}:{e},asetpts=PTS-STARTPTS[s{i}];"
+                       for i, (s, e) in enumerate(segs))) > 32000  # past the argv ceiling
+    wav = tr._extract_voiced_wav(p, segs)
+    try:
+        assert sf.info(wav).frames > 0
+    finally:
+        os.remove(wav)
