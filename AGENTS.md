@@ -47,8 +47,9 @@ mechanical work (transcribe, detect, cut, mix).
 ## Layout
 - `SKILL.md` — the runtime workflow + hard rules.
 - `references/edit-heuristics.md` — zh-TW editing knowledge the agent consults when cutting.
-- `helpers/` — one job each: `transcribe`, `align` (optional MMS forced-alignment re-timing —
-  fixes Scribe's collapsed word times at the source; `[align]` extra), `pack`, `repeats`,
+- `helpers/` — one job each: `transcribe` (runs `align` at the end — required), `align` (MMS
+  forced-alignment re-timing — fixes Scribe's collapsed word times at the source), `pack`,
+  `repeats`,
   `fillers`, `discourse` (context-dependent markers 对/好/然后…), `deadair`, `render`,
   `ai_listen`, `ai_providers` (pluggable cough-sweep backends), `review` (original-vs-edited
   listening page).

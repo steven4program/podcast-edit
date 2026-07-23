@@ -132,15 +132,14 @@ def _coarse_chunks(track_path, dur):
 
 
 def _load_model():
-    """MMS forced-alignment model + its romanized token dict. Raises a clear install hint if
-    the optional [align] extra isn't present (torch/torchaudio/pypinyin are heavy, so they are
-    not core deps — same pattern as [ai])."""
+    """MMS forced-alignment model + its romanized token dict. torch/torchaudio/pypinyin are
+    core deps (alignment is a required transcription step); this hint only fires on a broken
+    install."""
     try:
         import warnings, torchaudio, pypinyin  # noqa: F401  (pypinyin used by _romanize)
         warnings.filterwarnings("ignore")       # torchaudio.forced_align is deprecated in 2.8
     except ImportError as e:
-        raise SystemExit("alignment needs the optional deps: pip install -e \".[align]\"  "
-                         f"(missing: {e.name})")
+        raise SystemExit(f"alignment dep missing ({e.name}) — reinstall: pip install -e \".[dev]\"")
     bundle = torchaudio.pipelines.MMS_FA
     return bundle.get_model(), bundle.get_dict()
 

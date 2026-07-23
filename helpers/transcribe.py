@@ -332,8 +332,20 @@ def transcribe_multitrack(track_paths, out_path, language="zho"):
         normalized.append(_remap_transcript(norm, segments))
     merged = merge_tracks(normalized, duration=max(track_durations, default=0.0))
     merged["tracks"] = [_posix(p) for p in track_paths]
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(merged, f, ensure_ascii=False, indent=2)
+    with open(out_path, "w", encoding="utf-8") as f:      # save Scribe result FIRST — a
+        json.dump(merged, f, ensure_ascii=False, indent=2)  # re-timing failure never loses it
+    # Re-time against the audio: Scribe's word TIMES collapse on fast/run-together speech
+    # (a filler then swallows the next word — 矽谷 — and cuts land mid-sound). Alignment is a
+    # required part of transcription, not an optional pass; it runs here so every downstream
+    # step (pack, recall passes, ai_listen's cough mutes) builds on the corrected times.
+    try:
+        from .align import align_transcript
+        merged, _report = align_transcript(merged)
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(merged, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        raise SystemExit(f"transcription saved to {out_path} (Scribe times), but re-timing "
+                         f"failed: {e}\nFix, then run: python -m helpers.align {out_path} --write")
     return merged
 
 
