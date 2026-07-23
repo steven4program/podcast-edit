@@ -49,6 +49,15 @@ their own output dir, but `flagged.md` is written by you in step 2 — top alway
 1. Transcribe — `python -m helpers.transcribe <tracks_dir> edit/transcript.json` (per-track
    Scribe v2 with a VAD silence pre-pass + merge). On the first episode, confirm a
    `edit/work/transcript_<speaker>_raw.json` is per-word zh-TW with matching event tags.
+   1a. (Optional, recommended) Re-time — `python -m helpers.align edit/transcript.json --write`
+   (needs `pip install -e ".[align]"`; ~30 min/episode on CPU, downloads a ~1.2GB model once).
+   Scribe's word TIMES collapse on fast / run-together speech (a filler then swallows the next
+   word — e.g. 矽谷 — and cut boundaries land mid-sound); forced alignment re-times the KNOWN
+   text against the audio to fix them at the source. It only changes word start/end (text /
+   events untouched), keeps Scribe times where alignment is off-voice / out-of-order, and
+   writes a review list. **Run it HERE, before pack and every recall pass** — everything
+   downstream (esp. `ai_listen`'s cough mutes, which must sit in the speaker's real gaps) then
+   builds on the corrected times. Skipping it just leaves Scribe's times (the old behaviour).
    Then `python -m helpers.pack edit/transcript.json > edit/work/packed.md`.
 2. Propose cuts — read `edit/work/packed.md` and `references/edit-heuristics.md`. Write
    `edit/cuts.json` as `{"cuts": [...], "mutes": [...]}`:

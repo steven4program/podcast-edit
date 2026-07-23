@@ -11,6 +11,10 @@ dependencies = ["requests>=2.31", "numpy>=1.24", "soundfile>=0.12", "opencc-pyth
 # Scribe-only. Restore the dep here when re-enabling a provider:
 #   "google-genai>=1.0.0" (Gemini) / "openai>=1.50.0" (OpenAI)
 ai = []
+# Forced alignment (helpers/align.py): re-time Scribe's words against the audio so its
+# collapsed timestamps (a filler swallowing 矽谷, a marker's onset leaking) are fixed at the
+# source. Heavy, so optional. torchaudio.functional.forced_align is removed in 2.9 — pin below.
+align = ["torch>=2.1,<2.9", "torchaudio>=2.1,<2.9", "pypinyin>=0.50"]
 dev = ["pytest>=8.0"]
 
 [tool.setuptools]
