@@ -63,7 +63,9 @@ mechanical work (transcribe, detect, cut, mix).
 ## Setup & tests
 ```
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -e ".[ai,dev]"
+pip install -e ".[dev]"        # core deps include torch/torchaudio/pypinyin (alignment)
+python -m helpers.align --download   # fetch the ~1.2GB alignment model once (else the first
+                                     # transcription downloads it mid-run)
 cp .env.example .env   # ELEVENLABS_API_KEY (Scribe; cough detection is Scribe-only for now)
 ```
 Needs `ffmpeg` / `ffprobe` on PATH. **Run tests: `pytest test/ -q`.** Tests are offline — they

@@ -135,11 +135,17 @@ def _load_model():
     """MMS forced-alignment model + its romanized token dict. torch/torchaudio/pypinyin are
     core deps (alignment is a required transcription step); this hint only fires on a broken
     install."""
+    import os, sys
     try:
-        import warnings, torchaudio, pypinyin  # noqa: F401  (pypinyin used by _romanize)
+        import warnings, torch, torchaudio, pypinyin  # noqa: F401 (pypinyin used by _romanize)
         warnings.filterwarnings("ignore")       # torchaudio.forced_align is deprecated in 2.8
     except ImportError as e:
         raise SystemExit(f"alignment dep missing ({e.name}) — reinstall: pip install -e \".[dev]\"")
+    # torch.hub caches the model after the first download and reuses it silently; we only warn
+    # so the ~1.2GB first-run fetch isn't a mystery pause mid-transcription (see --download).
+    if not os.path.exists(os.path.join(torch.hub.get_dir(), "checkpoints", "model.pt")):
+        print("alignment: downloading the MMS model (~1.2GB, one time — then cached)…",
+              file=sys.stderr)
     bundle = torchaudio.pipelines.MMS_FA
     return bundle.get_model(), bundle.get_dict()
 
@@ -195,11 +201,18 @@ def align_transcript(transcript):
 
 
 if __name__ == "__main__":
-    import argparse, json
+    import argparse, json, sys
     p = argparse.ArgumentParser(description="Re-time transcript words via MMS forced alignment.")
-    p.add_argument("transcript")
+    p.add_argument("transcript", nargs="?", help="transcript.json (omit with --download)")
     p.add_argument("--write", action="store_true", help="overwrite the transcript in place")
+    p.add_argument("--download", action="store_true",
+                   help="fetch + cache the alignment model, then exit (run once at first setup)")
     a = p.parse_args()
+    if a.download:
+        _load_model()
+        print("alignment model ready."); sys.exit(0)
+    if not a.transcript:
+        p.error("transcript is required (or use --download)")
     t = json.load(open(a.transcript, encoding="utf-8"))
     t, report = align_transcript(t)
     if a.write:
