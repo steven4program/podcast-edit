@@ -3,7 +3,8 @@ name = "podcast-edit"
 version = "0.1.0"
 description = "Lean zh-TW podcast audio editing skill"
 requires-python = ">=3.10"
-dependencies = ["requests>=2.31", "numpy>=1.24", "soundfile>=0.12", "opencc-python-reimplemented>=0.1.7"]
+dependencies = ["requests>=2.31", "numpy>=1.24", "soundfile>=0.12", "opencc-python-reimplemented>=0.1.7",
+                "python-dotenv>=1.0"]
 
 [project.optional-dependencies]
 # Audio-LLM backends disabled (see helpers/ai_providers.py) — cough detection is
