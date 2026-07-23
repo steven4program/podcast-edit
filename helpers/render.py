@@ -382,6 +382,41 @@ def _run_ffmpeg(sources, fc, out_path, extra=()):
         os.remove(fc_path)
 
 
+def _render_mix(sources, segments, track_mutes, track_gains, mix_path):
+    """Cut + level + mix to the float intermediate at `mix_path` (pcm_f32le).
+
+    Renders each track through its OWN small filtergraph and amixes the float stems, instead
+    of one monster graph. One graph of n_tracks x len(segments) atrim/afade nodes drives
+    ffmpeg's per-frame scheduler super-linearly (measured: a 525-cut, 4-track episode ~5.5h
+    and climbing); n graphs of ~len(segments) nodes each run in minutes. The output is
+    numerically identical (test_per_track_mix_matches_monolith null-tests it to <1e-6): each
+    stem is exactly the [t{ti}] the monster graph builds — the SAME _filtergraph(1, ...) with
+    that track's mute/gain — the stems are float so re-reading them is lossless, and the amix
+    params (normalize=0) match. Mastering stays in render()."""
+    n = len(sources)
+    if n == 1:                      # already a small graph; no stems to gain from splitting
+        fc = _filtergraph(1, segments, track_mutes, track_gains)
+        _run_ffmpeg(sources, fc, mix_path, extra=("-c:a", "pcm_f32le"))
+        return
+    stems = []
+    try:
+        for ti, src in enumerate(sources):
+            fd, stem = tempfile.mkstemp(suffix=".wav"); os.close(fd)
+            stems.append(stem)
+            fc = _filtergraph(1, segments,
+                              {0: track_mutes[ti]} if track_mutes and ti in track_mutes else None,
+                              {0: track_gains.get(ti, 0.0)})
+            _run_ffmpeg([src], fc, stem, extra=("-c:a", "pcm_f32le"))
+        inputs = [x for s in stems for x in ("-i", s)]
+        _ffmpeg(["ffmpeg", "-y", *inputs, "-filter_complex",
+                 f"amix=inputs={n}:normalize=0[out]", "-map", "[out]",
+                 "-c:a", "pcm_f32le", mix_path])
+    finally:
+        for s in stems:
+            if os.path.exists(s):
+                os.remove(s)
+
+
 def render(transcript, cuts, audio_path, out_path, snap_window=0.3, mutes=None,
            track_gains=None):
     words = transcript["words"]
@@ -429,13 +464,12 @@ def render(transcript, cuts, audio_path, out_path, snap_window=0.3, mutes=None,
     track_mutes = _track_mutes(sources, mutes)
     if track_gains is None:
         track_gains = {ti: speech_gain(src) for ti, src in enumerate(sources)}
-    fc = _filtergraph(len(sources), segments, track_mutes, track_gains)
     # Cut+level+mix to a float intermediate (no clipping before mastering), measure,
     # then apply ONE static gain — see the mastering comment above _master_gain.
     fd, mix = tempfile.mkstemp(suffix=".wav")
     os.close(fd)
     try:
-        _run_ffmpeg(sources, fc, mix, extra=("-c:a", "pcm_f32le"))
+        _render_mix(sources, segments, track_mutes, track_gains, mix)
         gain = _master_gain(measure_loudness(mix)[0])
         for _ in range(2):
             _ffmpeg(["ffmpeg", "-y", "-i", mix, "-af",

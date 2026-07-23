@@ -424,3 +424,31 @@ def test_render_multitrack_cuts_each_track_and_mixes(tmp_path):
     assert os.path.exists(out)
     expected = sum(e - s for s, e in result["segments"])
     assert abs(r.probe_duration(out) - expected) < 0.3
+
+
+def test_per_track_mix_matches_monolith(tmp_path):
+    # The per-track render (_render_mix: render each track's own small filtergraph, then
+    # amix the float stems) must be numerically identical to the monster graph it replaces
+    # (_filtergraph(n, ...) + in-graph amix). Both write the float intermediate; the null
+    # test subtracts them and requires silence. Exercises multiple segments, per-track
+    # static gains, AND a mute (the three things the graph carries) so equivalence covers
+    # every branch, not just the trivial cut.
+    import numpy as np, soundfile as sf
+    a, b = str(tmp_path / "a.wav"), str(tmp_path / "b.wav")
+    make_two_tracks(a, b)
+    sources = [a, b]
+    segments = [(0.0, 1.2), (1.8, 3.7)]        # a real cut splits the timeline
+    gains = {0: -3.0, 1: 2.5}                   # different static gain per track
+    mutes = {0: [(0.5, 0.8)]}                    # mute a span on track A (cough superpower)
+
+    old = str(tmp_path / "old_mix.wav")
+    fc = r._filtergraph(len(sources), segments, mutes, gains)
+    r._run_ffmpeg(sources, fc, old, extra=("-c:a", "pcm_f32le"))
+
+    new = str(tmp_path / "new_mix.wav")
+    r._render_mix(sources, segments, mutes, gains, new)
+
+    xo, so = sf.read(old, dtype="float64")
+    xn, sn = sf.read(new, dtype="float64")
+    assert so == sn and xo.shape == xn.shape          # same rate + sample count
+    assert float(np.max(np.abs(xo - xn))) < 1e-6      # bit-for-bit (float32 epsilon) null
