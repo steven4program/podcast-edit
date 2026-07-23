@@ -15,10 +15,42 @@ cut** (review manually; cross-talk ones are handled in Phase 5 by muting that sp
 A filler whose voiced extent overlaps a laughter event is also flagged, never cut — the
 extent is first-to-last sound in the gap, so the cut would swallow the laugh with it.
 
+### Context-dependent markers (对/好/然后/就是/那个/其实/反正/我觉得…)
+Unlike 呃嗯啊欸 (always garbage), these are the SAME token used two ways — a real
+answer/affirmation ("你是說首頁嗎?" → "对") vs a discourse tic that just closes one thought
+and pivots ("…往哪邊導。对,然后就是…"). You **cannot decide from the word, only from
+context**, so do NOT blanket-delete any of them. Run the recall pass
+`python -m helpers.discourse edit/transcript.json`; it surfaces every occurrence with the
+objective features that separate the two and buckets each:
+- **cut** — same speaker, sentence-initial, a pivot connective (那/然后/就是/所以…) right
+  after, plausible duration → a tic. Confirm, then take the geometry from
+  `helpers.discourse.acoustic_cuts` (`python -m helpers.discourse … --acoustic`) — a
+  snap:false macro on the marker's TRUE voiced onset located on the speaker's own track.
+  Do NOT cut the word-id span: Scribe places 对/好 tokens at the TAIL of the sound, so a
+  word-id cut leaves the marker's onset audible (the same reason fillers are acoustic).
+  acoustic_cuts flags any whose boundary lands mid-word (run-together speech) for manual repair.
+- **keep** — answers another speaker (a turn boundary — multitrack gives this for free) or a
+  question. Never cut these; they carry meaning.
+- **review** — ambiguous (mid-clause grammatical role, demonstrative 那个+noun, 好 as an
+  adjective). READ the `context` text and decide; when in doubt, KEEP.
+- **flag** — token times fabricated (span too short per char) → manual repair, don't cut.
+
+The rule keys on features, not the word, so it transfers to every episode and to markers not
+yet in the list — add a new tic to `helpers.discourse._MARKERS` and it inherits the same
+triage. The safe failure mode is over-keeping: leaving a tic is a blemish, deleting a real
+answer is an error.
+
 ## Repeat-collapse (PRIORITY #1) — delete-earlier, keep-later
 Recall comes from `helpers.repeats` (adjacent-duplicate scan, per speaker) — run it instead
 of eyeballing; it has good recall but flags false positives you MUST drop: reduplicated words
 and names (`剛剛`, `常常`, `萬萬`, `汪汪`) and the emphasis/rhetoric below. You judge, it finds.
+
+**A candidate marked ⚠ 塌縮 goes to flagged.md, NEVER cuts.json.** Inside a stutter burst
+(你-你-你-你投) Scribe fabricates token widths (measured 80/220/10/330ms for four identical
+你), so the cut would remove a 10-100ms sliver of one continuous sound — the stutter stays
+audible while the transcript shows it struck, and the keep-onset boundary may clip the kept
+copy. Same principle as the keep-word rule below: token times are fiction there; don't cite
+them. Write the mm:ss to flagged.md for manual DAW repair instead.
 
 Adjacent duplicated word/phrase (exact or near-exact) → keep ONE, the LATER instance.
 - `我覺得 我覺得 這個` → delete the first `我覺得`.

@@ -58,13 +58,25 @@ their own output dir, but `flagged.md` is written by you in step 2 — top alway
      recall pass. REVIEW each and drop false positives: reduplicated words/names (`剛剛`, `萬萬`,
      `汪汪`), emphasis/rhetoric (`非常非常多`, `懂A懂B懂B懂A`). For a `false_start` flagged ⚠,
      extend the span if the abandoned fragment is longer than the 1-token guess (`我覺得——`, not
-     `得——`). Keep the confirmed ones. Add macro segment cuts (off-topic, retakes) from packed.md.
+     `得——`). A candidate marked ⚠ 塌縮 goes to flagged.md, never cuts.json — its token times
+     are fabricated (stutter burst) and the cut would leave the sound audible while the
+     transcript shows it removed. Keep the confirmed ones. Add macro segment cuts (off-topic,
+     retakes) from packed.md.
      Pre-show chatter is cut BY DEFAULT: macro-cut word 0 up to the host's show-opening
      greeting (類似「嗨，大家好，歡迎來到今天節目」, wording varies — see edit-heuristics).
    - Fillers: run `python -m helpers.fillers edit/transcript.json` (Scribe filler
      timestamps are unreliable; it finds the sound acoustically on the speaker's own
      track and flags the unsafe ones — embedded in speech, cross-talk, or overlapping
-     laughter).
+     laughter). Handles ONLY 呃嗯啊欸 (always garbage).
+   - Context-dependent markers (对/好/然后/就是/那个/其实/我觉得…, recall-first): run
+     `python -m helpers.discourse edit/transcript.json`. These are the SAME token used two
+     ways (a real answer vs a discourse tic) — NEVER blanket-delete. It buckets each by
+     objective context features: confirm the `cut` bucket (same-speaker tics before a pivot
+     connective), read the `review` bucket and default to KEEP, and never cut `keep` (answers
+     another speaker or a question). Take the confirmed cuts' geometry from `--acoustic`
+     (`python -m helpers.discourse edit/transcript.json --acoustic`) — snap:false macros on
+     each marker's true voiced onset; a word-id span leaks the onset (Scribe tokens sit at the
+     sound's tail). See edit-heuristics "Context-dependent markers".
    - Dead air: run `python -m helpers.deadair edit/transcript.json`. It proposes shortening
      every nobody-talking gap ≥1.2s down to 0.8s (word-union across speakers; gaps covered by
      a laughter event are never proposed; boundaries are acoustically slid off any real
