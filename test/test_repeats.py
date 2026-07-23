@@ -57,3 +57,53 @@ def test_false_start_bare_abandon_flags_one_token_span():
 def test_dash_at_clean_end_is_skipped():
     # dash then a different speaker → not a false start
     assert rp.find_false_starts(W(("好", "a"), ("——", "a"), ("對", "b"))) == []
+
+
+# ── timestamp-collapse warning (fabricated token widths in stutter bursts) ────
+def WT(*items):
+    return [{"id": i, "text": t, "speaker": s, "start": st, "end": en}
+            for i, (t, s, st, en) in enumerate(items)]
+
+
+def test_repeat_collapsed_span_carries_warning():
+    # Scribe fabricated widths in a 你-你 burst: removed span = keep.start - first.start
+    # = 10ms for 1 char → the cut would remove a sliver of a continuous sound. ⚠ marker
+    # tells the judging step to FLAG, not cut. A normal-width duplicate stays clean.
+    words = WT(("你", "a", 1.000, 1.010), ("-", "a", 1.010, 1.010),
+               ("你", "a", 1.010, 1.300), ("用", "a", 1.300, 1.500))
+    cuts = rp.find_repeats(words)
+    assert len(cuts) == 1 and "塌縮" in cuts[0]["reason"]
+    normal = WT(("你", "a", 1.000, 1.200), ("你", "a", 1.200, 1.400),
+                ("用", "a", 1.400, 1.600))
+    assert "塌縮" not in rp.find_repeats(normal)[0]["reason"]
+
+
+def test_false_start_collapsed_span_carries_warning():
+    # 它非——它花 with the fragment collapsed to 30ms/2字 → ⚠; normal span → clean.
+    words = WT(("它", "a", 1.000, 1.010), ("非", "a", 1.010, 1.020),
+               ("——", "a", 1.020, 1.020), ("它", "a", 1.030, 1.300),
+               ("花", "a", 1.300, 1.500))
+    fs = rp.find_false_starts(words)
+    assert len(fs) == 1 and "塌縮" in fs[0]["reason"]
+    normal = WT(("它", "a", 1.000, 1.200), ("非", "a", 1.200, 1.450),
+                ("——", "a", 1.450, 1.450), ("它", "a", 1.600, 1.800),
+                ("花", "a", 1.800, 2.000))
+    assert "塌縮" not in rp.find_false_starts(normal)[0]["reason"]
+
+
+def test_false_start_collapse_detected_behind_real_pause():
+    # Fragment tokens collapsed (这个—— = 70ms for 2 chars) but a real 650ms pause
+    # follows before the restart: resolve keeps the pause (0.5s cap), so the removed
+    # span is just the 70ms sliver. Measuring to the keep onset (720ms) would hide
+    # the collapse — the warning must mirror resolve's semantics and still fire.
+    words = WT(("这", "a", 1.000, 1.050), ("个", "a", 1.050, 1.070),
+               ("——", "a", 1.070, 1.070), ("这", "a", 1.720, 1.900),
+               ("让", "a", 1.900, 2.100))
+    fs = rp.find_false_starts(words)
+    assert len(fs) == 1 and "塌縮" in fs[0]["reason"]
+
+
+def test_collapse_check_skipped_without_timestamps():
+    # minimal fixtures (no start/end) must not crash and get no marker
+    cuts = rp.find_repeats(W(("你", "a"), ("你", "a"), ("用", "a")))
+    assert cuts and "塌縮" not in cuts[0]["reason"]

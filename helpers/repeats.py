@@ -13,6 +13,34 @@ _STRIP = "，。、！？…—–-　 .,!?；：「」（）()"
 _FILLERS = ("呃", "嗯", "啊", "欸")
 _DASH = ("——", "—", "–", "ーー")  # abandon / trailing-off markers ('-' is handled as a repeat)
 
+# Inside a stutter burst (你-你-你-你投) Scribe FABRICATES token widths — measured
+# 80/220/10/330ms for four identical 你 — so a cut citing those spans removes a
+# 10-100ms sliver of a continuous sound (the stutter survives, audibly) and its
+# keep-onset boundary may clip the kept copy. Real zh speech runs ~150-300ms/char;
+# an effective span (removed start → keep word onset) under this budget means the
+# local timestamps are fiction and NO boundary here can be trusted → the candidate
+# is marked ⚠ so the judging step flags it for manual repair instead of cutting.
+_COLLAPSE_S_PER_CHAR = 0.06
+
+
+def _collapse_warning(by_id, first_id, end_id, keep_id, removed_texts):
+    """Mirrors resolve_cut_times: the effective removed span is start → end_word.end,
+    onset-aligned to the keep word only when it is within 0.5s (a real pause between
+    an abandoned fragment and its restart is NOT removed, so measuring to the keep
+    onset would hide a collapsed fragment behind the pause)."""
+    a, e, k = by_id.get(first_id, {}), by_id.get(end_id, {}), by_id.get(keep_id, {})
+    if a.get("start") is None or e.get("end") is None:
+        return ""
+    end = e["end"]
+    if k.get("start") is not None and a["start"] < k["start"] < end + 0.5:
+        end = k["start"]
+    span = end - a["start"]
+    n = sum(len(re.findall(r"\w", t)) for t in removed_texts)
+    if n and span < _COLLAPSE_S_PER_CHAR * n:
+        return (f" ⚠ 塌縮 {span * 1000:.0f}ms/{n}字 — token times fabricated "
+                f"(stutter burst); FLAG for manual repair, don't cut")
+    return ""
+
 
 def _norm(text):
     return text.strip(_STRIP)
@@ -28,6 +56,7 @@ def find_repeats(words, max_phrase=6):
     Punctuation/fillers between copies are skipped for matching but folded into the
     deleted span (end_word runs up to just before the kept copy). Triples emit one cut
     per extra copy. Returns cut dicts citing word ids (render resolves + onset-aligns)."""
+    by_id = {w["id"]: w for w in words}
     content = [(w["id"], _norm(w["text"]), w["speaker"]) for w in words if _is_content(w["text"])]
     n = len(content)
     out, i = [], 0
@@ -42,8 +71,9 @@ def find_repeats(words, max_phrase=6):
             a = content[i:i + hit]
             keep_id = content[i + hit][0]            # first token of the kept (later) copy
             phrase = "".join(t[1] for t in a)
+            warn = _collapse_warning(by_id, a[0][0], keep_id - 1, keep_id, [t[1] for t in a])
             out.append({"type": "micro", "start_word": a[0][0], "end_word": keep_id - 1,
-                        "reason": f"repeat 「{phrase}」 — delete-earlier, keep #{keep_id} (review: emphasis?)"})
+                        "reason": f"repeat 「{phrase}」 — delete-earlier, keep #{keep_id} (review: emphasis?){warn}"})
             i += hit                                 # the kept copy may itself repeat again
         else:
             i += 1
@@ -58,6 +88,7 @@ def find_false_starts(words, lookback=4):
     guess flagged for span review (correct for 斯——/在——/不——, needs extending for 我覺得——).
     Recall aid like find_repeats — the LLM confirms the cut and the span."""
     out = []
+    by_id = {w["id"]: w for w in words}
     for di, d in enumerate(words):
         if d["text"].strip() not in _DASH:
             continue
@@ -71,13 +102,18 @@ def find_false_starts(words, lookback=4):
         pn = _norm(post["text"])
         hit = next((w for w in reversed(pre[-lookback:]) if _norm(w["text"]) == pn), None)
         if hit:                                          # restart-repeat → precise span
-            frag = "".join(_norm(x["text"]) for x in pre if x["id"] >= hit["id"])
+            frag_words = [x for x in pre if x["id"] >= hit["id"]]
+            frag = "".join(_norm(x["text"]) for x in frag_words)
+            warn = _collapse_warning(by_id, hit["id"], d["id"], post["id"],
+                                     [_norm(x["text"]) for x in frag_words])
             out.append({"type": "micro", "start_word": hit["id"], "end_word": d["id"],
-                        "reason": f"false start 「{frag}——」 restart 「{pn}」 #{post['id']} — keep later"})
+                        "reason": f"false start 「{frag}——」 restart 「{pn}」 #{post['id']} — keep later{warn}"})
         else:                                            # bare abandon → flag span for review
             prev = pre[-1]
+            warn = _collapse_warning(by_id, prev["id"], d["id"], post["id"],
+                                     [_norm(prev["text"])])
             out.append({"type": "micro", "start_word": prev["id"], "end_word": d["id"],
-                        "reason": f"false start 「{_norm(prev['text'])}——」? ⚠ extend span if longer — keep 「{pn}」 #{post['id']}"})
+                        "reason": f"false start 「{_norm(prev['text'])}——」? ⚠ extend span if longer — keep 「{pn}」 #{post['id']}{warn}"})
     return out
 
 
