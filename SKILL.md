@@ -112,12 +112,36 @@ their own output dir, but `flagged.md` is written by you in step 2 — top alway
          (`mm:ss + type`) for manual repair. Cut/mute can't remove these without taking the
          words too (spectral denoise is out of scope — see the roadmap in the design spec).
      LAUGHTER IS NEVER A CANDIDATE.
+   Assemble `cuts.json` + `flagged.md` with the sanctioned merge — DON'T hand-type ~800
+   candidates and DON'T improvise a throwaway script. Save each pass's JSON to
+   `edit/work/` (`repeats.json`, `fillers.json`, `discourse_acoustic.json` (from `--acoustic`),
+   `deadair.json`, `cough.json`), then run
+   `python -m helpers.compile_cuts edit/transcript.json --intro-word <greeting_id> --drop <疊詞…> --exclude <vetoed start_words…>`.
+   It merges the no-judgment categories, applies YOUR decisions (intro cut, the reduplication/
+   emphasis `--drop` list, per-candidate `--exclude` vetoes), routes ⚠塌縮 + co-articulated
+   coughs to `flagged.md`, and drops any word-id cut that lands mid-word on the multitrack
+   timeline (so the emitted cuts.json renders without a mid-word ValueError). The editorial
+   judgment stays yours (the inputs); the helper only does the mechanical merge.
    Present a grouped list: `[mm:ss] removed text/sound — reason`, plus the `flagged.md` items.
-3. Review gate — `python -m helpers.render edit/transcript.json edit/cuts.json edit/work/preview.mp3`.
-   (Tracks are read from transcript.json; for a single-file source pass `--audio <file>`.)
-   User reads the list and listens. Apply changes to cuts.json, re-render. Loop until approved.
-4. Final render — `python -m helpers.render edit/transcript.json edit/cuts.json edit/out/final.mp3`
-   (+ `edit/out/final_kept_transcript.json`). Seams are clean by construction (render's mid-word
+3. Review gate — render the preview, then ALWAYS bring up the review page and hand the user
+   its URL. Do this every run without being asked — it is how the run ends, not an extra the
+   user must request:
+   - `python -m helpers.render edit/transcript.json edit/cuts.json edit/work/preview.mp3`
+     (tracks are read from transcript.json; for a single-file source pass `--audio <file>`).
+   - `python -m helpers.review edit/transcript.json edit/cuts.json edit/work/review.html
+     --edited 剪輯後=edit/work/preview.mp3 --serve` — run it in the BACKGROUND so the server
+     stays up, then give the user the printed `http://127.0.0.1:<port>/…/review.html` URL to
+     open themselves (don't auto-launch a browser). The page has original vs edited players,
+     the annotated transcript, and the 完成 export button (which renders the final mix +
+     per-speaker stems from the CURRENT cuts.json when clicked).
+   User reads the list and listens. Apply changes to cuts.json, re-render, and refresh the page
+   (the served page re-reads cuts.json on each export). Loop until approved.
+4. Final render — render the deliverable in the SAME container as the source tracks (wav in →
+   `final.wav`, mp3 in → `final.mp3`); render honors the path you give it verbatim, so pass the
+   source's extension: `python -m helpers.render edit/transcript.json edit/cuts.json
+   edit/out/final.<source-ext>` (+ `edit/out/final_kept_transcript.json`). To also get
+   per-speaker stems, use `--stems edit/out` instead (same format-follows-source rule; this is
+   what the review page's 完成 button runs). Seams are clean by construction (render's mid-word
    guard + 3ms fade per join), so there is no signal-level QA step — an RMS-ratio seam check
    only re-flags normal pause→speech.
 5. Chapters — read `edit/out/final_kept_transcript.json`, write `edit/out/chapters.txt` (`mm:ss Title`).
@@ -125,11 +149,17 @@ their own output dir, but `flagged.md` is written by you in step 2 — top alway
 
 ## Helpers
 - transcribe.py — multitrack dir (or single file) → transcript.json (words+speaker+events).
+- compile_cuts.py — merge the detection passes' `work/*.json` → `cuts.json` + `flagged.md`
+  (the sanctioned step-2 assembly; editorial decisions are `--intro-word`/`--drop`/`--exclude`
+  inputs, not baked-in rules).
 - pack.py — transcript.json → packed.md (zh-TW reading view).
 - repeats.py — adjacent-duplicate + `——` false-start finder (recall aid); LLM reviews candidates.
 - deadair.py — long nobody-talking gaps → shorten-to-0.8s macro-cut proposals (laughter-safe,
   boundaries acoustically verified per track).
-- render.py — transcript.json + cuts.json → preview/final.mp3 + kept_transcript.json (per-track cut → mix).
+- render.py — transcript.json + cuts.json → output audio + kept_transcript.json (per-track cut →
+  mix). The output format is the extension of the OUT path you pass (render honors it verbatim):
+  preview is `preview.mp3` (small, throwaway); the final deliverable should use the source's
+  extension (wav in → `final.wav`, mp3 in → `final.mp3`).
   `--stems` treats OUT as a directory and exports in the source tracks' format (wav in →
   wav out, mp3 in → mp3 out): `final.<ext>` (integrated mix) + one `final_<speaker>.<ext>`
   stem per source track, all cut at the same boundaries (stems keep per-track leveling but
@@ -140,13 +170,17 @@ their own output dir, but `flagged.md` is written by you in step 2 — top alway
   `verify_on_track` (drop hallucinations) → `split_events` (mute gaps / flag co-articulated);
   `classify` confirms a single clip (needs an enabled provider). [Phase 5]
 - review.py — transcript.json + cuts.json → `edit/work/review.html`: original vs edited
-  players + the transcript annotated with every cut/mute and its reason (offer it to the
-  user at the review gate). With `--serve [PORT]` it also serves the page and enables the
-  完成 button, which exports the mix + per-speaker stems to `edit/out/` in the source
-  tracks' format (opened as a plain file the button explains it needs --serve).
+  players + the transcript annotated with every cut/mute and its reason. The review gate
+  ALWAYS runs it with `--serve [PORT]` (step 3) — this serves the page (in the background)
+  and enables the 完成 button, which exports the mix + per-speaker stems to `edit/out/` in
+  the source tracks' format; hand the user the printed URL. (Opened as a plain file instead,
+  the button explains it needs --serve.)
 
 ## Anti-patterns
 - Don't invent timestamps — always cite word ids from transcript.json.
 - Don't auto-remove anything that might be a laugh.
 - Don't skip the preview/approval gate.
 - Don't write into the source folder or the skill folder.
+- Don't improvise throwaway scripts inside the repo to assemble cuts.json (or anything else).
+  Use `helpers.compile_cuts` for the merge; scratch/experiments go to the OS temp dir, never
+  the project. A repo-write guard hook (`.claude/settings.json`) enforces this.

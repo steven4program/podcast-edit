@@ -50,7 +50,9 @@ mechanical work (transcribe, detect, cut, mix).
 - `helpers/` — one job each: `transcribe` (runs `align` at the end — required), `align` (MMS
   forced-alignment re-timing — fixes Scribe's collapsed word times at the source), `pack`,
   `repeats`,
-  `fillers`, `discourse` (context-dependent markers 对/好/然后…), `deadair`, `render`,
+  `fillers`, `discourse` (context-dependent markers 对/好/然后…), `deadair`,
+  `compile_cuts` (merge the detection passes' `work/*.json` → `cuts.json` + `flagged.md`;
+  the LLM's decisions are inputs, not baked-in rules), `render`,
   `ai_listen`, `ai_providers` (pluggable cough-sweep backends), `review` (original-vs-edited
   listening page).
 - `test/` — pytest, one file per helper; `fixtures.py` has a synthetic transcript + WAV.
@@ -76,6 +78,17 @@ network or API calls in tests).
 - **Simplicity first.** Minimum code that works; no speculative abstraction or config. Match the
   surrounding style. Prefer deleting over adding — the QA step and ~11 MB of scratch were removed
   because they earned their keep no longer.
+- **No throwaway scripts in the repo.** A mechanical step that recurs (e.g. assembling
+  `cuts.json` from ~800 candidates) belongs in a tested helper (`compile_cuts`), not an
+  improvised one-off. One-off experiments/scratch go to the OS temp dir. A `.claude/settings.json`
+  PreToolUse guard (`.claude/hooks/guard_repo_writes.py`, `Write|Edit|Bash|PowerShell`) denies
+  three things, so the tool call is blocked, not just discouraged: a new `.py`/`.sh` outside
+  `helpers/`+`test/`+`.claude/hooks/`; a Write/Edit into `source/`; and a scratch/debug file
+  (`.err`/`.log`/`.tmp`/…) ANYWHERE in the repo — including via shell redirect (`… 2>foo.err`),
+  which is why it inspects Bash/PowerShell commands, not just file writes. Pipeline redirects into
+  `source/edit/` and `$VAR`/`/dev/null`/temp targets stay allowed. Keep the skill runnable from a
+  single "edit this podcast" request without the agent inventing files (`test_guard_repo_writes.py`
+  locks it).
 - **Every non-trivial change leaves one runnable check** (an assert-level test per branch / parser
   / cut path). Trivial one-liners don't need a test.
 - **Don't break render's invariants** (word-id-only timing, the mid-word guard, 3ms fades,
